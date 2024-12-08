@@ -62,8 +62,13 @@ class Paper:
     weight: float
     processed_time: str
     role: str  # major_author, minor_author, or not_author
-    original_text: str = ""  # Add original text field
+    original_text: str = ""
     title: str = "Untitled"
+    authors: List[str] = None  # Add authors field
+
+    def __post_init__(self):
+        if self.authors is None:
+            self.authors = []
 
 @dataclass
 class Topic:
@@ -88,16 +93,14 @@ class ResearchSummaryManager:
         self.output_dir.mkdir(exist_ok=True)
         
         # Create subdirectories for different outputs
-        self.cache_dir = self.output_dir / "cache"
         self.summaries_dir = self.output_dir / "summaries"
-        self.data_dir = self.output_dir / "data"  # New directory for json files
+        self.data_dir = self.output_dir / "data"
         
-        self.cache_dir.mkdir(exist_ok=True)
         self.summaries_dir.mkdir(exist_ok=True)
         self.data_dir.mkdir(exist_ok=True)
         
         # Define paths for common files
-        self.cache_file = self.data_dir / "summaries_cache.json"
+        self.cache_file = self.data_dir / "papers_cache.json"
         self.partial_results_file = self.data_dir / "partial_results.json"
         self.final_summaries_file = self.data_dir / "final_summaries.json"
         self.narrative_file = self.output_dir / "year_in_review_narrative.txt"
@@ -304,36 +307,14 @@ def merge_author_names(names: List[str]) -> List[str]:
     
     return merged
 
-def extract_authors_with_cache(text: str, llm, cache_dir: Path) -> List[str]:
-    """Extract authors from text with caching."""
-    # Create hash of text content for cache key
-    text_hash = hashlib.md5(text.encode()).hexdigest()
-    cache_file = cache_dir / f"authors_{text_hash}.json"
+def extract_authors_with_cache(text: str, llm, cache_data: dict) -> List[str]:
+    """Extract authors from text using cache data."""
+    if cache_data and "authors" in cache_data:
+        print(f"[CACHE] Using cached authors")
+        return cache_data["authors"]  # Already normalized in cache
     
-    # Check cache first
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r") as f:
-                cached_data = json.load(f)
-            print(f"[CACHE] Using cached authors")
-            return [normalize_author_name(author) for author in cached_data]
-        except Exception as e:
-            print(f"[CACHE] Error reading author cache: {e}")
-    
-    # Extract authors if not in cache
     authors = extract_authors(text, llm)
-    
-    # Normalize author names
     normalized_authors = [normalize_author_name(author) for author in authors]
-    
-    # Save to cache
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, "w") as f:
-            json.dump(normalized_authors, f)
-    except Exception as e:
-        print(f"[ERROR] Failed to cache authors: {e}")
-    
     return normalized_authors
 
 def categorize_paper(authors: List[str], your_name: str = "Pranav Rajpurkar") -> str:
@@ -363,37 +344,31 @@ def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict
     """Group papers into topics using LLM-based classification."""
     clustering_prompt = f"""
     You will be provided with a list of research paper summaries along with their weights.
-    Please cluster these papers into exactly {num_topics} coherent topics.
+    Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
     
     Guidelines for topic names:
-    1. Find the right balance of specificity - group papers that share similar technical approaches or goals
-    2. Focus on the shared technical methodology or problem space
-    3. Capture the key technical innovation area (e.g., "Automated_Report_Generation" or "Diagnostic_Performance_Enhancement")
-    4. Use underscores between words
+    1. Make a clear, declarative statement about the research contribution
+    2. Focus on specific technical innovations and their impact
+    3. Use natural language (no underscores)
+    4. Emphasize the novel methodology and its demonstrated benefits
+    
+    Bad topic names:
+    - Too vague (just stating a field)
+    - Not making a specific claim
+    - Not mentioning technical approach
+    - Using technical notation or jargon
     
     Each topic should:
-    - Group 2-4 related papers that share similar technical approaches or goals
+    - Make a specific claim about technical innovation
+    - Group 2-4 papers that support this claim
     - Include at least one major paper (weight 1.0)
-    - Represent a meaningful technical area, not just a single paper's contribution
+    - Focus on shared methodological advances
     
-    Bad examples (too specific):
-    - "X_REM_Report_Generation_System"  (focuses on single paper)
-    - "FineRadScore_Evaluation_Framework"  (too narrow)
-    
-    Good examples:
-    - "Report_Generation_and_Validation"  (groups related report generation papers)
-    - "Diagnostic_Performance_Enhancement"  (groups papers on improving diagnosis)
-    - "Medical_Image_Understanding"  (groups related image analysis papers)
-    
-    Return ONLY a JSON object with this exact format:
+    Return ONLY a JSON object with topic names as keys and paper indices as values, like this:
     {{
-        "technical_area_1": [0, 1, 2],
-        "technical_area_2": [3, 4],
-        ...
+        "Novel attention mechanisms improve model performance": [0, 1, 2],
+        "Automated data validation enhances reliability": [3, 4]
     }}
-    where the numbers are the indices of the papers (starting from 0).
-
-    Here are the papers:
     """
 
     # Build the list of papers with their summaries and weights
@@ -424,26 +399,23 @@ def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict
 
     return topic_groups
 
-def analyze_collaborators(papers: List[Paper], llm, author_name: str) -> Dict[str, List[str]]:
-    """Analyze collaborators for a group of papers."""
-    # Normalize the author name we're analyzing
+def analyze_collaborators(papers: List[Paper], author_name: str) -> Dict[str, List[str]]:
+    """Analyze collaborators using pre-extracted author lists."""
     normalized_author_name = normalize_author_name(author_name)
     
-    # First get all authors for each paper
+    # Get all authors from papers
     paper_authors = {}
-    manager = ResearchSummaryManager()
     all_authors = set()
     
     for paper in papers:
-        authors = extract_authors_with_cache(paper.original_text, llm, manager.cache_dir)
-        # Remove the author being analyzed (including variations)
+        # Use pre-extracted authors from Paper object
         authors = [
-            a for a in authors 
+            a for a in paper.authors 
             if not are_same_author(a, author_name)
         ]
         paper_authors[paper.file_path] = authors
         all_authors.update(authors)
-        print(f"[DEBUG] Extracted authors for {Path(paper.file_path).name}: {authors}")
+        print(f"[DEBUG] Authors for {Path(paper.file_path).name}: {authors}")
     
     # Merge author name variations
     all_authors = merge_author_names(list(all_authors))
@@ -483,23 +455,12 @@ def analyze_collaborators(papers: List[Paper], llm, author_name: str) -> Dict[st
         "author_counts": dict(author_counts)
     }
 
-def extract_title_with_cache(text: str, llm, cache_dir: Path) -> str:
-    """Extract paper title from text with caching."""
-    # Create hash of text content for cache key
-    text_hash = hashlib.md5(text.encode()).hexdigest()
-    cache_file = cache_dir / f"title_{text_hash}.json"
+def extract_title_with_cache(text: str, llm, cache_data: dict) -> str:
+    """Extract paper title from text using cache data."""
+    if cache_data and "title" in cache_data:
+        print(f"[CACHE] Using cached title")
+        return cache_data["title"]
     
-    # Check cache first
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r") as f:
-                cached_data = json.load(f)
-            print(f"[CACHE] Using cached title")
-            return cached_data["title"]
-        except Exception as e:
-            print(f"[CACHE] Error reading title cache: {e}")
-    
-    # Extract title if not in cache
     prompt = ChatPromptTemplate.from_template("""
         Extract the title of this research paper. The title might be:
         - At the beginning of the text
@@ -514,13 +475,7 @@ def extract_title_with_cache(text: str, llm, cache_dir: Path) -> str:
     """)
     
     try:
-        title = llm.invoke(prompt.format(text=text[:2000])).content.strip()  # Use first 2000 chars for efficiency
-        
-        # Save to cache
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, "w") as f:
-            json.dump({"title": title}, f)
-            
+        title = llm.invoke(prompt.format(text=text[:2000])).content.strip()
         return title
     except Exception as e:
         print(f"[ERROR] Failed to extract title: {e}")
@@ -550,7 +505,7 @@ def generate_weighted_topic_summary(papers: List[Paper], llm, author_name: str) 
     ])
     
     # Add collaborator analysis
-    collaborator_info = analyze_collaborators(papers, llm, author_name)
+    collaborator_info = analyze_collaborators(papers, author_name)
     
     # Add collaborator information to the narrative prompt
     papers_text += "\n\nKey Collaborators:\n"
@@ -585,100 +540,70 @@ def generate_weighted_topic_summary(papers: List[Paper], llm, author_name: str) 
     
     return flowing_summary, paper_summaries, collaborator_info
 
-def determine_authorship_role(text: str, author_name: str, llm) -> Tuple[str, float]:
-    """Determine if the author had a major or minor role in the paper using LLM."""
+def determine_authorship_role_from_authors(authors: List[str], author_name: str) -> Tuple[str, float]:
+    """Determine role and weight based on author position in author list.
+    
+    Returns:
+        Tuple of (role, weight) where:
+        - role is one of: "primary_author", "contributing_author", "not_author"
+        - weight is 1.0 for primary authors (first/last), 0.5 for others
+    """
     normalized_author_name = normalize_author_name(author_name)
     
-    # First, get the author list
-    authors = extract_authors_with_cache(text, llm, ResearchSummaryManager().cache_dir)
+    if not authors:
+        return "not_author", 0.0
     
-    # Check if author is first or last
-    if authors:
-        if normalize_author_name(authors[0]) == normalized_author_name:
-            return "major_author", 1.0  # First author
-        if normalize_author_name(authors[-1]) == normalized_author_name:
-            return "major_author", 1.0  # Last/senior author
+    # Check if author is in the list at all
+    author_present = any(normalize_author_name(author) == normalized_author_name for author in authors)
+    if not author_present:
+        return "not_author", 0.0
+        
+    # Primary authorship: first or last author
+    if (normalize_author_name(authors[0]) == normalized_author_name or 
+        normalize_author_name(authors[-1]) == normalized_author_name):
+        return "primary_author", 1.0
     
-    # For other cases (co-first, co-senior), use LLM
-    prompt = ChatPromptTemplate.from_template("""
-        Analyze the author list and determine if {author} had a major or minor role.
-        Note: The author name might appear with titles (PhD, MD, etc.) or in different formats.
-        
-        Major roles include ONLY:
-        - Co-first author (indicated by *, †, equal contribution note, or similar)
-        - Co-senior/corresponding author (indicated by *, †, #, or noted as corresponding/senior author)
-        
-        DO NOT consider regular first or last author position - this is handled separately.
-        Look ONLY for explicit indications of co-first or co-senior status.
-        
-        Text: {text}
-        Author to find (may have variations): {author}
-        
-        First, extract:
-        1. Any footnotes about equal contribution
-        2. Any notes about corresponding or senior authors
-        3. Any symbols (*, †, etc.) next to author names
-        
-        Then determine if the author has a co-first or co-senior role based on these annotations ONLY.
-        
-        Return ONLY one of these exact strings:
-        - "major_author" if they were explicitly marked as co-first or co-senior author
-        - "minor_author" if no such markings exist
-        - "not_author" if they are not in the author list
-    """)
-    
-    try:
-        result = llm.invoke(prompt.format(
-            author=author_name,
-            text=text
-        )).content.strip().lower()
-        
-        # Map roles to weights - major authors always get weight 1.0
-        weights = {
-            "major_author": 1.0,  # High weight for major contributions
-            "minor_author": 0.3,  # Lower weight for minor contributions
-            "not_author": 0.1     # Minimal weight if not an author
-        }
-        
-        weight = weights.get(result, 0.1)
-        print(f"[DEBUG] Role determination result: {result} -> weight: {weight}")
-        return result, weight
-        
-    except Exception as e:
-        print(f"[ERROR] Failed to determine authorship role: {e}")
-        return "not_author", 0.1
+    # Contributing author: anywhere else in author list
+    return "contributing_author", 0.5
 
 def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
-    """Process a single PDF and return a Paper object."""
+    """Process a single PDF and return a Paper object with all metadata."""
     cache_key = get_cache_key(pdf_file)
     if cache_key in cache:
         try:
             cached_data = cache[cache_key]
-            # Verify cached data has expected format
-            if isinstance(cached_data, dict) and all(k in cached_data for k in ['summary', 'weight', 'role', 'original_text']):
-                print(f"[CACHE] Using cached summary for: {pdf_file}")
-                return Paper(
-                    file_path=pdf_file,
-                    summary=cached_data['summary'],
-                    weight=cached_data['weight'],
-                    processed_time=str(Path(pdf_file).stat().st_mtime),
-                    role=cached_data['role'],
-                    original_text=cached_data['original_text']
-                )
-            else:
-                print(f"[CACHE] Invalid cache format for {pdf_file}. Regenerating.")
+            print(f"[CACHE] Using cached data for: {pdf_file}")
+            return Paper(
+                file_path=pdf_file,
+                summary=cached_data['summary'],
+                weight=cached_data['weight'],
+                processed_time=str(Path(pdf_file).stat().st_mtime),
+                role=cached_data['role'],
+                original_text=cached_data['original_text'],
+                title=cached_data['title'],
+                authors=cached_data['authors']
+            )
         except Exception as e:
             print(f"[CACHE] Error reading cache for {pdf_file}: {e}. Regenerating.")
     
-    print(f"[NEW] Generating summary for: {pdf_file}")
+    print(f"[NEW] Processing: {pdf_file}")
     loader = PyPDFLoader(pdf_file)
     docs = loader.load_and_split()
     
     # Combine all pages into one text
     original_text = "\n".join([doc.page_content for doc in docs]) if docs else ""
-    print(f"[DEBUG] Extracted {len(original_text)} characters of text from {pdf_file}")
     
-    # Create a more concise summary
+    # Create empty cache data for this file
+    file_cache = {}
+    
+    # Extract metadata using cache
+    authors = extract_authors_with_cache(original_text, llm, file_cache)
+    title = extract_title_with_cache(original_text, llm, file_cache)
+    
+    # Determine role and weight based on authors
+    role, weight = determine_authorship_role_from_authors(authors, author_name)
+    
+    # Generate summary
     summary_prompt = PromptTemplate.from_template("""
         Summarize this research paper in 2-3 sentences, focusing on:
         1. The main contribution or innovation
@@ -689,32 +614,20 @@ def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
         Provide ONLY the summary, no additional text.
     """)
     
-    chain = load_summarize_chain(
-        llm,
-        chain_type="stuff",
-        prompt=summary_prompt
-    )
+    chain = load_summarize_chain(llm, chain_type="stuff", prompt=summary_prompt)
     summary = chain.invoke(docs)["output_text"]
-
-    # Determine authorship role and weight
-    role, weight = determine_authorship_role(original_text, author_name, llm)
-    print(f"[INFO] Determined {role} (weight: {weight}) for {pdf_file}")
-
-    # Extract title
-    manager = ResearchSummaryManager()
-    title = extract_title_with_cache(original_text, llm, manager.cache_dir)
-    print(f"[INFO] Extracted title: {title}")
-
-    # Cache the results
+    
+    # Cache all paper data
     cache[cache_key] = {
         'summary': summary,
         'weight': weight,
         'role': role,
         'original_text': original_text,
-        'title': title
+        'title': title,
+        'authors': authors  # Already normalized
     }
     save_cache(cache)
-
+    
     return Paper(
         file_path=pdf_file,
         summary=summary,
@@ -722,7 +635,8 @@ def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
         processed_time=str(Path(pdf_file).stat().st_mtime),
         role=role,
         original_text=original_text,
-        title=title
+        title=title,
+        authors=authors
     )
 
 def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: int = 5) -> List[Topic]:
@@ -735,6 +649,7 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
     pdf_files = glob.glob(pdfs_folder + "/*.pdf")
     total_pdfs = len(pdf_files)
     processed_count = 0
+    save_threshold = max(1, min(5, total_pdfs // 10))  # Save every 10% or at least every 5 papers
 
     print(f"[INFO] Found {total_pdfs} PDFs to process")
 
@@ -747,7 +662,7 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
         for future in as_completed(futures):
             pdf_file = futures[future]
             try:
-                paper = future.result()  # Now returns Paper object
+                paper = future.result()
                 papers.append(paper)
 
                 # Update partial results
@@ -758,14 +673,20 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
                     "processed_time": paper.processed_time,
                     "role": paper.role
                 }
-                save_partial_results(partial_results)
 
                 processed_count += 1
-                print(f"[PROGRESS] Processed {processed_count}/{total_pdfs} PDFs")
+                # Save partial results periodically instead of every time
+                if processed_count % save_threshold == 0:
+                    save_partial_results(partial_results)
+                    print(f"[PROGRESS] Processed {processed_count}/{total_pdfs} PDFs")
 
             except Exception as e:
                 print(f"[ERROR] Processing {pdf_file}: {e}")
                 print(f"[DEBUG] Error details: {str(e)}")
+
+    # Save final partial results
+    if partial_results:
+        save_partial_results(partial_results)
 
     if not papers:
         raise ValueError("No summaries were generated. Check the error messages above.")
@@ -824,50 +745,68 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
 
 def generate_narrative(topics: List[Topic]) -> str:
     """Generate a cohesive narrative connecting research themes and contributions."""
-    narrative = ""
     theme_titles = [topic.name for topic in topics]
     
-    # 1. Brief Technical Overview
+    # 1. Technical Overview
     overview_prompt = ChatPromptTemplate.from_template("""
-        Create a brief (2-3 paragraphs) technical overview that:
-        1. Shows how these research areas connect: {themes}
-        2. Highlights key methodological advances across themes
-        3. Identifies common technical challenges addressed
+        Create a technical overview (2-3 paragraphs) that:
+        1. Identifies the major research themes across these areas: {themes}
+        2. Highlights specific technical innovations and methodological advances
+        3. Shows how different technical approaches complement each other
+        4. Emphasizes concrete outcomes and impact
         
-        Keep it focused on technical relationships and shared methodologies.
-        Be specific about how the areas complement each other.
+        Style guidelines:
+        - Use active voice and technical language
+        - Focus on methodological connections
+        - Highlight specific technical challenges solved
+        - Maintain academic tone while being engaging
+        - Include quantitative results where relevant
     """)
     
     overview = llm.invoke(overview_prompt.format(themes=", ".join(theme_titles)))
-    narrative += f"{overview.content}\n\n"
+    narrative = f"{overview.content}\n\n"
 
-    # 2. Add each topic's content with minimal additional generation
+    # 2. Detailed Topic Discussions
     for topic in topics:
         narrative += f"### {topic.name}\n\n"
-        # Add a single bridging sentence
-        bridge_prompt = ChatPromptTemplate.from_template("""
-            Write a single sentence that connects this theme to the overall narrative:
-            Theme: {theme}
+        
+        # Add context sentence
+        context_prompt = ChatPromptTemplate.from_template("""
+            Write a single technical sentence that:
+            1. Places this research claim in context: {theme}
+            2. Connects it to broader technical challenges
+            3. Highlights its methodological significance
             
-            Keep it technical and specific.
+            Be specific about technical aspects and avoid generic statements.
         """)
-        bridge = llm.invoke(bridge_prompt.format(theme=topic.name))
-        narrative += f"{bridge.content}\n\n"
         
-        # Use the existing topic summary
+        context = llm.invoke(context_prompt.format(theme=topic.name))
+        narrative += f"{context.content}\n\n"
+        
+        # Use the existing detailed topic summary
         narrative += f"{topic.summary}\n\n"
-
-    # 3. Brief Technical Conclusion
-    conclusion_prompt = ChatPromptTemplate.from_template("""
-        Write a brief (2-3 sentences) technical conclusion that:
-        1. Identifies key methodological challenges remaining across these areas: {themes}
-        2. Suggests specific technical directions for future work
         
-        Focus only on concrete technical challenges and opportunities.
+        # Add collaborator insights
+        if topic.collaborators:
+            narrative += "Key Technical Collaborations:\n"
+            if topic.collaborators.get('major_authors'):
+                narrative += f"- Led joint technical development with: {', '.join(topic.collaborators['major_authors'])}\n"
+            if topic.collaborators.get('frequent_collaborators'):
+                narrative += f"- Sustained technical partnerships with: {', '.join(topic.collaborators['frequent_collaborators'])}\n"
+            narrative += "\n"
+
+    # 3. Future Directions
+    conclusion_prompt = ChatPromptTemplate.from_template("""
+        Write a technical conclusion (2-3 sentences) that:
+        1. Identifies specific methodological challenges remaining in: {themes}
+        2. Suggests concrete technical approaches for future work
+        3. Highlights opportunities for combining methods across themes
+        
+        Focus on technical aspects and methodological innovations.
     """)
     
     conclusion = llm.invoke(conclusion_prompt.format(themes=", ".join(theme_titles)))
-    narrative += f"{conclusion.content}"
+    narrative += f"\n{conclusion.content}"
 
     return narrative
 
