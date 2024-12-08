@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from dataclasses import dataclass
 from collections import Counter
+import unicodedata
 
 from langchain.chains.summarize import load_summarize_chain
 from langchain_community.document_loaders import PyPDFLoader
@@ -17,6 +18,27 @@ from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
 from collections import defaultdict
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+
+# Configuration Constants
+DEFAULT_CONFIG = {
+    # Author settings
+    "AUTHOR_NAME": "Pranav Rajpurkar",
+    
+    # Model settings
+    "MODEL_NAME": "gpt-4-mini",
+    "MODEL_TEMPERATURE": 0.1,
+    
+    # Directory settings
+    "PDF_FOLDER": "pdfs",
+    "OUTPUT_DIR": "outputs",
+    
+    # Processing settings
+    "NUM_TOPICS": 5,
+    "MAX_WORKERS": 8,  # For ThreadPoolExecutor
+    
+    # Cache settings
+    "CACHE_VERSION": "1.0",
+}
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,8 +53,6 @@ llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.1
 )
-
-CACHE_VERSION = "4.0"  # Increment this when cache format changes
 
 @dataclass
 class Paper:
@@ -63,7 +83,7 @@ class Topic:
 class ResearchSummaryManager:
     """Manages the processing and storage of research summaries."""
     
-    def __init__(self, output_dir: str = "outputs"):
+    def __init__(self, output_dir: str = DEFAULT_CONFIG["OUTPUT_DIR"]):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
@@ -142,21 +162,21 @@ def load_cache():
             with open(manager.cache_file, "r") as f:
                 cache_data = json.load(f)
             
-            if cache_data.get("version") != CACHE_VERSION:
-                print(f"[CACHE] Outdated cache version. Expected {CACHE_VERSION}, found {cache_data.get('version')}. Rebuilding cache.")
-                return {"version": CACHE_VERSION, "entries": {}}
+            if cache_data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
+                print(f"[CACHE] Outdated cache version. Expected {DEFAULT_CONFIG['CACHE_VERSION']}, found {cache_data.get('version')}. Rebuilding cache.")
+                return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
             
             return cache_data["entries"]
         except (json.JSONDecodeError, KeyError) as e:
             print(f"[CACHE] Error loading cache: {e}. Rebuilding cache.")
-            return {"version": CACHE_VERSION, "entries": {}}
-    return {"version": CACHE_VERSION, "entries": {}}
+            return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
+    return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
 
 def save_cache(cache):
     """Save the cache to disk with version information."""
     manager = ResearchSummaryManager()
     cache_data = {
-        "version": CACHE_VERSION,
+        "version": DEFAULT_CONFIG["CACHE_VERSION"],
         "entries": cache
     }
     with open(manager.cache_file, "w") as f:
@@ -170,42 +190,119 @@ def load_partial_results():
             with open(manager.partial_results_file, "r") as f:
                 data = json.load(f)
             
-            if data.get("version") != CACHE_VERSION:
-                print(f"[PARTIAL] Outdated version. Expected {CACHE_VERSION}, found {data.get('version')}. Rebuilding.")
-                return {"version": CACHE_VERSION, "entries": {}}
+            if data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
+                print(f"[PARTIAL] Outdated version. Expected {DEFAULT_CONFIG['CACHE_VERSION']}, found {data.get('version')}. Rebuilding.")
+                return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
             
             return data["entries"]
         except (json.JSONDecodeError, KeyError) as e:
             print(f"[PARTIAL] Error loading partial results: {e}. Rebuilding.")
-            return {"version": CACHE_VERSION, "entries": {}}
-    return {"version": CACHE_VERSION, "entries": {}}
+            return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
+    return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
 
 def save_partial_results(results):
     """Save partial results to disk with version information."""
     manager = ResearchSummaryManager()
     data = {
-        "version": CACHE_VERSION,
+        "version": DEFAULT_CONFIG["CACHE_VERSION"],
         "entries": results
     }
     with open(manager.partial_results_file, "w") as f:
         json.dump(data, f, indent=4)
 
 def normalize_author_name(name: str) -> str:
-    """Normalize author name by removing titles and standardizing format."""
+    """
+    Normalize author name by:
+    1. Removing titles and suffixes
+    2. Normalizing Unicode characters
+    3. Handling middle names/initials
+    4. Standardizing format
+    """
+    # First normalize Unicode characters
+    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('ASCII')
+    
     # Remove common titles and suffixes
     titles = [
-        "Dr.", "Prof.", "Professor", "PhD", "Ph.D.", "MD", "M.D.", 
-        "MS", "M.S.", "BSc", "B.Sc.", "MSc", "M.Sc."
+        "Dr", "Prof", "Professor", "PhD", "Ph.D", "MD", "M.D", 
+        "MS", "M.S", "BSc", "B.Sc", "MSc", "M.Sc",
+        "MBBS", "MPH", "DrPH", "DPhil", "ScD"
     ]
+    
     name = name.strip()
+    # Remove periods and commas
+    name = re.sub(r'[.,]', '', name)
+    
+    # Convert to lowercase for comparison
+    name_lower = name.lower()
     for title in titles:
         # Remove title with optional period and surrounding spaces
-        name = re.sub(rf'\b{title}\.?\s*', '', name, flags=re.IGNORECASE)
+        pattern = rf'\b{title}\.?\s*'
+        name_lower = re.sub(pattern, '', name_lower, flags=re.IGNORECASE)
     
-    # Remove any remaining punctuation and extra whitespace
-    name = re.sub(r'[.,]', '', name)
-    name = ' '.join(name.split())
-    return name
+    # Split into parts
+    parts = name_lower.split()
+    if not parts:
+        return ""
+    
+    # Handle middle names/initials
+    if len(parts) > 2:
+        # Keep first and last name, initialize middle names
+        first = parts[0]
+        last = parts[-1]
+        middles = [p[0] for p in parts[1:-1] if p]  # Get initials of middle names
+        if middles:
+            return f"{first} {''.join(middles)} {last}".strip()
+        return f"{first} {last}"
+    
+    # Return normalized name
+    return ' '.join(parts)
+
+def are_same_author(name1: str, name2: str) -> bool:
+    """
+    Check if two author names refer to the same person.
+    Handles variations in spelling, formatting, and middle names.
+    """
+    n1 = normalize_author_name(name1)
+    n2 = normalize_author_name(name2)
+    
+    if n1 == n2:
+        return True
+    
+    # Split into parts
+    n1_parts = n1.split()
+    n2_parts = n2.split()
+    
+    # Check first and last name match
+    if len(n1_parts) > 0 and len(n2_parts) > 0:
+        if n1_parts[0] == n2_parts[0] and n1_parts[-1] == n2_parts[-1]:
+            return True
+    
+    return False
+
+def merge_author_names(names: List[str]) -> List[str]:
+    """Merge different variations of the same author name."""
+    merged = []
+    merged_groups = []
+    
+    for name in names:
+        # Check if this name belongs to any existing group
+        found = False
+        for group in merged_groups:
+            if any(are_same_author(name, existing) for existing in group):
+                group.add(name)
+                found = True
+                break
+        
+        if not found:
+            # Create new group
+            merged_groups.append({name})
+    
+    # Take the longest name from each group as the canonical form
+    for group in merged_groups:
+        canonical = max(group, key=len)
+        merged.append(canonical)
+    
+    return merged
 
 def extract_authors_with_cache(text: str, llm, cache_dir: Path) -> List[str]:
     """Extract authors from text with caching."""
@@ -335,15 +432,31 @@ def analyze_collaborators(papers: List[Paper], llm, author_name: str) -> Dict[st
     # First get all authors for each paper
     paper_authors = {}
     manager = ResearchSummaryManager()
+    all_authors = set()
+    
     for paper in papers:
         authors = extract_authors_with_cache(paper.original_text, llm, manager.cache_dir)
-        # Remove the author being analyzed (including variations) from the list
+        # Remove the author being analyzed (including variations)
         authors = [
             a for a in authors 
-            if normalize_author_name(a) != normalized_author_name
+            if not are_same_author(a, author_name)
         ]
         paper_authors[paper.file_path] = authors
+        all_authors.update(authors)
         print(f"[DEBUG] Extracted authors for {Path(paper.file_path).name}: {authors}")
+    
+    # Merge author name variations
+    all_authors = merge_author_names(list(all_authors))
+    
+    # Update paper_authors with merged names
+    for paper_path, authors in paper_authors.items():
+        merged_authors = []
+        for author in authors:
+            for canonical in all_authors:
+                if are_same_author(author, canonical):
+                    merged_authors.append(canonical)
+                    break
+        paper_authors[paper_path] = merged_authors
     
     # Find major authors (first/last/co-first/co-senior)
     major_authors = set()
@@ -625,7 +738,7 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
 
     print(f"[INFO] Found {total_pdfs} PDFs to process")
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=DEFAULT_CONFIG["MAX_WORKERS"]) as executor:
         futures = {
             executor.submit(process_pdf, pdf_file, cache, author_name): pdf_file 
             for pdf_file in pdf_files
@@ -800,44 +913,46 @@ def extract_authors(text: str, llm) -> List[str]:
         print(f"[DEBUG] Raw LLM response:\n{result}")
         return []
 
-# Modify main execution
-if __name__ == "__main__":
-    manager = ResearchSummaryManager()
+def run_pdf_summarization(config: dict = None):
+    """Main function to run the PDF summarization pipeline with configuration."""
+    # Merge provided config with defaults
+    cfg = DEFAULT_CONFIG.copy()
+    if config:
+        cfg.update(config)
     
-    folder_path = "pdfs"  # Replace with your PDF folder path
-    author_name = "Pranav Rajpurkar"  # Can be changed to any author name
-    num_topics = 5  # Set the desired number of topics
-    
-    print(f"[START] Summarizing PDFs from folder: {folder_path}")
-    print(f"[CONFIG] Analyzing contributions for author: {author_name}")
-    
-    topics = summarize_pdfs_from_folder(
-        pdfs_folder=folder_path,
-        author_name=author_name,
-        num_topics=num_topics
+    # Initialize OpenAI client
+    llm = ChatOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=cfg["MODEL_NAME"],
+        temperature=cfg["MODEL_TEMPERATURE"]
     )
     
-    print("\n[RESULT] Summaries by Research Topic:")
-    print("====================================")
-    for topic in topics:
-        print(f"\n{topic.name.upper()}:")
-        print("----------------")
-        print("Papers in this topic:")
-        for paper in topic.papers:
-            print(f"- {Path(paper.file_path).name}")
-            print(f"  Brief summary: {topic.paper_summaries[paper.file_path]}")
-        
-        print("\nKey Collaborators:")
-        print(f"Major Authors: {', '.join(topic.collaborators['major_authors'])}")
-        print(f"Frequent Collaborators: {', '.join(topic.collaborators['frequent_collaborators'])}")
-        
-        print("\nTopic Summary:")
-        print(topic.summary)
-        print()
-    print("[DONE] All PDFs processed and topic summaries generated.")
-
-    # Generate the narrative using the topic groups
+    # Initialize manager with configured output directory
+    manager = ResearchSummaryManager(output_dir=cfg["OUTPUT_DIR"])
+    
+    print(f"[START] Summarizing PDFs from folder: {cfg['PDF_FOLDER']}")
+    print(f"[CONFIG] Analyzing contributions for author: {cfg['AUTHOR_NAME']}")
+    
+    topics = summarize_pdfs_from_folder(
+        pdfs_folder=cfg["PDF_FOLDER"],
+        author_name=cfg["AUTHOR_NAME"],
+        num_topics=cfg["NUM_TOPICS"]
+    )
+    
+    # Generate and save narrative
     narrative = generate_narrative(topics)
     manager.save_final_narrative(narrative)
+    
+    print("[DONE] Processing complete. Narrative generated successfully.")
+    return topics, narrative
 
-    print("Narrative generated successfully.")
+if __name__ == "__main__":
+    # Load environment variables
+    load_dotenv()
+    
+    # Check for API key
+    if not os.getenv("OPENAI_API_KEY"):
+        raise ValueError("Please set the OPENAI_API_KEY environment variable in .env file")
+    
+    # Run with default config
+    topics, narrative = run_pdf_summarization()
