@@ -1,0 +1,18 @@
+.env
+.DS_Store
+
+# VSCode
+.vscode
+
+# Node
+node_modules
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Python
+.pytest_cache
+
+*.json
+*.pdf
