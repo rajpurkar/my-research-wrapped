@@ -10,6 +10,10 @@ from dotenv import load_dotenv
 from dataclasses import dataclass
 from collections import Counter
 import unicodedata
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import print as rprint
 
 from langchain.chains.summarize import load_summarize_chain
 from langchain_community.document_loaders import PyPDFLoader
@@ -18,6 +22,9 @@ from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
 from collections import defaultdict
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+
+# Initialize rich console
+console = Console()
 
 # Configuration Constants
 DEFAULT_CONFIG = {
@@ -34,10 +41,10 @@ DEFAULT_CONFIG = {
     
     # Processing settings
     "NUM_TOPICS": 5,
-    "MAX_WORKERS": 8,  # For ThreadPoolExecutor
+    "MAX_WORKERS": 16,
     
     # Cache settings
-    "CACHE_VERSION": "1.0",
+    "CACHE_VERSION": "2.0",
 }
 
 # Load environment variables from .env file
@@ -92,40 +99,51 @@ class ResearchSummaryManager:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
-        # Create subdirectories for different outputs
+        # Create a more organized directory structure
+        self.cache_dir = self.output_dir / "cache"
         self.summaries_dir = self.output_dir / "summaries"
+        self.papers_dir = self.output_dir / "papers"
+        self.topics_dir = self.output_dir / "topics"
         self.data_dir = self.output_dir / "data"
         
-        self.summaries_dir.mkdir(exist_ok=True)
-        self.data_dir.mkdir(exist_ok=True)
+        # Create all directories
+        for directory in [self.cache_dir, self.summaries_dir, 
+                         self.papers_dir, self.topics_dir, self.data_dir]:
+            directory.mkdir(exist_ok=True)
         
         # Define paths for common files
-        self.cache_file = self.data_dir / "papers_cache.json"
         self.partial_results_file = self.data_dir / "partial_results.json"
         self.final_summaries_file = self.data_dir / "final_summaries.json"
         self.narrative_file = self.output_dir / "year_in_review_narrative.txt"
     
-    def save_paper(self, paper: Paper):
-        """Save processed paper information."""
-        paper_data = {
-            "file_path": paper.file_path,
-            "summary": paper.summary,
-            "weight": paper.weight,
-            "processed_time": paper.processed_time,
-            "role": paper.role
-        }
-        
-        # Use paper's hash as filename
-        paper_hash = get_cache_key(paper.file_path)
-        paper_file = self.cache_dir / f"{paper_hash}.json"
-        
-        with open(paper_file, "w") as f:
-            json.dump(paper_data, f, indent=4)
+    def get_paper_cache_path(self, paper_hash: str) -> Path:
+        """Get path for individual paper cache file."""
+        return self.cache_dir / f"{paper_hash}.json"
     
+    def get_paper_path(self, paper_hash: str) -> Path:
+        """Get path for processed paper data."""
+        return self.papers_dir / f"{paper_hash}.json"
+    
+    def get_topic_path(self, topic_name: str) -> Path:
+        """Get path for topic data."""
+        # Sanitize topic name for filesystem
+        safe_name = "".join(c for c in topic_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        return self.topics_dir / f"{safe_name}.json"
+    
+    def save_final_narrative(self, narrative: str):
+        """Save the final narrative."""
+        with open(self.narrative_file, "w") as f:
+            f.write(narrative)
+
     def save_topic(self, topic: Topic):
-        """Save topic information."""
+        """Save topic data to individual file."""
+        topic_file = self.get_topic_path(topic.name)
+        
         topic_data = {
             "name": topic.name,
+            "summary": topic.summary,
+            "paper_summaries": topic.paper_summaries,
+            "collaborators": topic.collaborators,
             "papers": [
                 {
                     "file_path": p.file_path,
@@ -134,22 +152,15 @@ class ResearchSummaryManager:
                     "brief_summary": topic.paper_summaries.get(p.file_path, ""),
                     "weight": p.weight,
                     "processed_time": p.processed_time,
-                    "role": p.role
+                    "role": p.role,
+                    "authors": p.authors
                 }
                 for p in topic.papers
-            ],
-            "summary": topic.summary,
-            "collaborators": topic.collaborators
+            ]
         }
         
-        topic_file = self.summaries_dir / f"{topic.name}.json"
         with open(topic_file, "w") as f:
             json.dump(topic_data, f, indent=4)
-    
-    def save_final_narrative(self, narrative: str):
-        """Save the final narrative."""
-        with open(self.narrative_file, "w") as f:
-            f.write(narrative)
 
 def get_cache_key(pdf_path):
     """Generate a cache key based on file path and last modified time."""
@@ -157,33 +168,48 @@ def get_cache_key(pdf_path):
     content_key = f"{pdf_path}:{pdf_stats.st_mtime}"
     return hashlib.md5(content_key.encode()).hexdigest()
 
-def load_cache():
-    """Load the cache from disk with version checking."""
-    manager = ResearchSummaryManager()
-    if manager.cache_file.exists():
+def load_cache_for_paper(paper_path: str, manager: ResearchSummaryManager) -> dict:
+    """Load cache for a specific paper."""
+    paper_hash = get_cache_key(paper_path)
+    cache_file = manager.get_paper_cache_path(paper_hash)
+    
+    if cache_file.exists():
         try:
-            with open(manager.cache_file, "r") as f:
+            with open(cache_file, "r") as f:
                 cache_data = json.load(f)
-            
             if cache_data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
-                print(f"[CACHE] Outdated cache version. Expected {DEFAULT_CONFIG['CACHE_VERSION']}, found {cache_data.get('version')}. Rebuilding cache.")
-                return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
-            
-            return cache_data["entries"]
+                return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
+            return cache_data
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"[CACHE] Error loading cache: {e}. Rebuilding cache.")
-            return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
-    return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
+            print(f"[CACHE] Error loading cache for {paper_path}: {e}")
+            return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
+    return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
 
-def save_cache(cache):
-    """Save the cache to disk with version information."""
-    manager = ResearchSummaryManager()
-    cache_data = {
-        "version": DEFAULT_CONFIG["CACHE_VERSION"],
-        "entries": cache
-    }
-    with open(manager.cache_file, "w") as f:
+def save_cache_for_paper(paper_path: str, cache_data: dict, manager: ResearchSummaryManager):
+    """Save cache for a specific paper."""
+    paper_hash = get_cache_key(paper_path)
+    cache_file = manager.get_paper_cache_path(paper_hash)
+    
+    with open(cache_file, "w") as f:
         json.dump(cache_data, f, indent=4)
+
+def save_paper_data(paper: Paper, manager: ResearchSummaryManager):
+    """Save processed paper data to individual file."""
+    paper_hash = get_cache_key(paper.file_path)
+    paper_file = manager.get_paper_path(paper_hash)
+    
+    paper_data = {
+        "file_path": paper.file_path,
+        "title": paper.title,
+        "authors": paper.authors,
+        "summary": paper.summary,
+        "weight": paper.weight,
+        "processed_time": paper.processed_time,
+        "role": paper.role
+    }
+    
+    with open(paper_file, "w") as f:
+        json.dump(paper_data, f, indent=4)
 
 def load_partial_results():
     """Load partial results from disk with version checking."""
@@ -400,57 +426,82 @@ def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict
     return topic_groups
 
 def analyze_collaborators(papers: List[Paper], author_name: str) -> Dict[str, List[str]]:
-    """Analyze collaborators using pre-extracted author lists."""
+    """Analyze key collaborators across papers in a topic."""
     normalized_author_name = normalize_author_name(author_name)
     
-    # Get all authors from papers
-    paper_authors = {}
-    all_authors = set()
+    # Create a table for paper listings
+    paper_table = Table(show_header=True, header_style="bold magenta")
+    paper_table.add_column("Paper", style="dim", width=30)
+    paper_table.add_column("Weight", justify="right")
+    paper_table.add_column("Authors", width=50)
+    
+    # Track collaborators
+    author_counts = Counter()
+    primary_collaborators = set()  # First/last authors we worked with
     
     for paper in papers:
-        # Use pre-extracted authors from Paper object
-        authors = [
-            a for a in paper.authors 
-            if not are_same_author(a, author_name)
-        ]
-        paper_authors[paper.file_path] = authors
-        all_authors.update(authors)
-        print(f"[DEBUG] Authors for {Path(paper.file_path).name}: {authors}")
+        # Format authors for display
+        authors_str = ", ".join(paper.authors[:3])
+        if len(paper.authors) > 3:
+            authors_str += "..."
+            
+        paper_table.add_row(
+            Path(paper.file_path).name,
+            f"{paper.weight:.1f}",
+            authors_str
+        )
+        
+        # Analyze collaborators
+        if paper.authors:
+            # Add first and last authors to primary collaborators if we're also primary
+            if paper.role == "primary_author":
+                if len(paper.authors) > 0:
+                    primary_collaborators.add(paper.authors[0])  # First author
+                if len(paper.authors) > 1:
+                    primary_collaborators.add(paper.authors[-1])  # Last author
+            
+            # Count all co-authors
+            for author in paper.authors:
+                if normalize_author_name(author) != normalized_author_name:
+                    author_counts[author] += 1
     
-    # Merge author name variations
-    all_authors = merge_author_names(list(all_authors))
-    
-    # Update paper_authors with merged names
-    for paper_path, authors in paper_authors.items():
-        merged_authors = []
-        for author in authors:
-            for canonical in all_authors:
-                if are_same_author(author, canonical):
-                    merged_authors.append(canonical)
-                    break
-        paper_authors[paper_path] = merged_authors
-    
-    # Find major authors (first/last/co-first/co-senior)
-    major_authors = set()
-    for authors in paper_authors.values():
-        if authors:  # Check if list is not empty
-            major_authors.add(authors[0])  # First author
-            if len(authors) > 1:
-                major_authors.add(authors[-1])  # Last/senior author
-    
-    # Count author appearances
-    author_counts = Counter()
-    for authors in paper_authors.values():
-        author_counts.update(authors)
-    
-    # Find frequent collaborators (appear in more than one paper)
-    frequent_collaborators = {
-        author for author, count in author_counts.items() 
-        if count > 1 and author != author_name
+    # Remove self from primary collaborators
+    primary_collaborators = {
+        author for author in primary_collaborators 
+        if normalize_author_name(author) != normalized_author_name
     }
     
+    # Find frequent collaborators (2+ papers)
+    frequent_collaborators = {
+        author for author, count in author_counts.items() 
+        if count > 1
+    }
+    
+    # Print summary
+    console.rule(f"[bold blue]Papers and Collaborations", style="blue")
+    console.print(paper_table)
+    
+    if primary_collaborators or frequent_collaborators:
+        collab_text = []
+        if primary_collaborators:
+            collab_text.append("[bold]Primary Co-Authors:[/bold]")
+            collab_text.append("  " + ", ".join(sorted(primary_collaborators)))
+        if frequent_collaborators:
+            if collab_text:
+                collab_text.append("")
+            collab_text.append("[bold]Frequent Co-Authors (2+ papers):[/bold]")
+            collab_text.append("  " + ", ".join(sorted(frequent_collaborators)))
+        
+        console.print(Panel(
+            "\n".join(collab_text),
+            title="Key Collaborators",
+            border_style="blue"
+        ))
+    
+    console.print()
+    
     return {
-        "major_authors": list(major_authors),
+        "primary_collaborators": list(primary_collaborators),
         "frequent_collaborators": list(frequent_collaborators),
         "author_counts": dict(author_counts)
     }
@@ -509,7 +560,7 @@ def generate_weighted_topic_summary(papers: List[Paper], llm, author_name: str) 
     
     # Add collaborator information to the narrative prompt
     papers_text += "\n\nKey Collaborators:\n"
-    papers_text += f"Major Authors: {', '.join(collaborator_info['major_authors'])}\n"
+    papers_text += f"Primary Co-Authors: {', '.join(collaborator_info['primary_collaborators'])}\n"
     papers_text += f"Frequent Collaborators: {', '.join(collaborator_info['frequent_collaborators'])}\n"
     
     narrative_prompt = ChatPromptTemplate.from_template("""
@@ -566,39 +617,44 @@ def determine_authorship_role_from_authors(authors: List[str], author_name: str)
     # Contributing author: anywhere else in author list
     return "contributing_author", 0.5
 
-def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
+def process_pdf(pdf_file: str, manager: ResearchSummaryManager, author_name: str) -> Paper:
     """Process a single PDF and return a Paper object with all metadata."""
-    cache_key = get_cache_key(pdf_file)
-    if cache_key in cache:
-        try:
-            cached_data = cache[cache_key]
-            print(f"[CACHE] Using cached data for: {pdf_file}")
-            return Paper(
-                file_path=pdf_file,
-                summary=cached_data['summary'],
-                weight=cached_data['weight'],
-                processed_time=str(Path(pdf_file).stat().st_mtime),
-                role=cached_data['role'],
-                original_text=cached_data['original_text'],
-                title=cached_data['title'],
-                authors=cached_data['authors']
-            )
-        except Exception as e:
-            print(f"[CACHE] Error reading cache for {pdf_file}: {e}. Regenerating.")
+    cache_data = load_cache_for_paper(pdf_file, manager)
     
-    print(f"[NEW] Processing: {pdf_file}")
+    if "summary" in cache_data:
+        # Use cached data...
+        filename = Path(pdf_file).name
+        if len(filename) > 40:  # Truncate long filenames
+            filename = filename[:37] + "..."
+        console.print(f"[dim]← Cached: {filename}[/dim]")
+        paper = Paper(
+            file_path=pdf_file,
+            summary=cache_data['summary'],
+            weight=cache_data['weight'],
+            processed_time=str(Path(pdf_file).stat().st_mtime),
+            role=cache_data['role'],
+            original_text=cache_data.get('original_text', ''),
+            title=cache_data['title'],
+            authors=cache_data['authors']
+        )
+        save_paper_data(paper, manager)
+        return paper
+    
+    # If we're processing new file, show that clearly
+    filename = Path(pdf_file).name
+    if len(filename) > 40:
+        filename = filename[:37] + "..."
+    console.print(f"[bold blue]→ Processing: {filename}[/bold blue]")
+    
     loader = PyPDFLoader(pdf_file)
     docs = loader.load_and_split()
     
     # Combine all pages into one text
     original_text = "\n".join([doc.page_content for doc in docs]) if docs else ""
     
-    # Create empty cache data for this file
-    file_cache = {}
-    
     # Extract metadata using cache
-    authors = extract_authors_with_cache(original_text, llm, file_cache)
-    title = extract_title_with_cache(original_text, llm, file_cache)
+    authors = extract_authors_with_cache(original_text, llm, {})
+    title = extract_title_with_cache(original_text, llm, {})
     
     # Determine role and weight based on authors
     role, weight = determine_authorship_role_from_authors(authors, author_name)
@@ -617,18 +673,19 @@ def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
     chain = load_summarize_chain(llm, chain_type="stuff", prompt=summary_prompt)
     summary = chain.invoke(docs)["output_text"]
     
-    # Cache all paper data
-    cache[cache_key] = {
+    # Save cache and paper data
+    cache_data.update({
         'summary': summary,
         'weight': weight,
         'role': role,
-        'original_text': original_text,
         'title': title,
-        'authors': authors  # Already normalized
-    }
-    save_cache(cache)
+        'authors': authors,
+        'original_text': original_text,
+        'version': DEFAULT_CONFIG["CACHE_VERSION"]
+    })
+    save_cache_for_paper(pdf_file, cache_data, manager)
     
-    return Paper(
+    paper = Paper(
         file_path=pdf_file,
         summary=summary,
         weight=weight,
@@ -638,24 +695,28 @@ def process_pdf(pdf_file: str, cache: dict, author_name: str) -> Paper:
         title=title,
         authors=authors
     )
+    save_paper_data(paper, manager)
+    return paper
 
-def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: int = 5) -> List[Topic]:
+def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: int = 5, status=None) -> List[Topic]:
     """Process PDFs and return a list of Topics."""
     manager = ResearchSummaryManager()
     papers: List[Paper] = []
-    cache = load_cache()
     partial_results = load_partial_results()
 
     pdf_files = glob.glob(pdfs_folder + "/*.pdf")
     total_pdfs = len(pdf_files)
     processed_count = 0
-    save_threshold = max(1, min(5, total_pdfs // 10))  # Save every 10% or at least every 5 papers
+    save_threshold = max(1, min(5, total_pdfs // 10))
 
-    print(f"[INFO] Found {total_pdfs} PDFs to process")
+    console.print()
+    console.rule("[bold cyan]Processing PDFs", style="cyan")
+    console.print(f"[cyan]Found {total_pdfs} PDFs to process[/cyan]")
+    console.print()
 
     with ThreadPoolExecutor(max_workers=DEFAULT_CONFIG["MAX_WORKERS"]) as executor:
         futures = {
-            executor.submit(process_pdf, pdf_file, cache, author_name): pdf_file 
+            executor.submit(process_pdf, pdf_file, manager, author_name): pdf_file 
             for pdf_file in pdf_files
         }
         
@@ -665,31 +726,26 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
                 paper = future.result()
                 papers.append(paper)
 
-                # Update partial results
-                partial_results[pdf_file] = {
-                    "file_path": paper.file_path,
-                    "summary": paper.summary,
-                    "weight": paper.weight,
-                    "processed_time": paper.processed_time,
-                    "role": paper.role
-                }
-
                 processed_count += 1
-                # Save partial results periodically instead of every time
                 if processed_count % save_threshold == 0:
                     save_partial_results(partial_results)
-                    print(f"[PROGRESS] Processed {processed_count}/{total_pdfs} PDFs")
+                    if status:
+                        status.update(f"[bold green]Progress: {processed_count}/{total_pdfs} PDFs")
 
             except Exception as e:
-                print(f"[ERROR] Processing {pdf_file}: {e}")
-                print(f"[DEBUG] Error details: {str(e)}")
+                console.print(f"[red]Error processing {Path(pdf_file).name}:[/red]")
+                console.print(f"[red dim]{str(e)}[/red dim]")
 
+    console.print()
     # Save final partial results
     if partial_results:
         save_partial_results(partial_results)
 
     if not papers:
         raise ValueError("No summaries were generated. Check the error messages above.")
+
+    if status:
+        status.update("[bold green]Grouping papers into topics...")
 
     # Group papers by topic
     topic_groups = group_papers_by_topic(papers, llm, num_topics=num_topics)
@@ -702,24 +758,55 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
     final_paper_summaries = {}
     final_collaborators = {}
     for topic, papers in topic_groups.items():
-        print(f"[TOPIC] Summarizing papers about {topic}")
-        print(f"Papers in this topic: {[Path(p.file_path).name for p in papers]}")
+        console.rule(f"[bold cyan]Topic: {topic}")
+        
+        # Create a table for papers
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Paper", style="dim")
+        table.add_column("Weight", justify="right")
+        table.add_column("Authors")
+        
+        for paper in papers:
+            authors_str = ", ".join(paper.authors[:3])
+            if len(paper.authors) > 3:
+                authors_str += "..."
+            
+            table.add_row(
+                Path(paper.file_path).name,
+                f"{paper.weight:.1f}",
+                authors_str
+            )
+        
+        console.print(table)
+        console.print()
+
+        if status:
+            status.update(f"[bold green]Generating summary for: {topic}")
+
         try:
             topic_summary, paper_summaries, collaborator_info = generate_weighted_topic_summary(
-                papers, 
-                llm, 
-                author_name
+                papers, llm, author_name
             )
             final_summaries[topic] = topic_summary
             final_paper_summaries[topic] = paper_summaries
             final_collaborators[topic] = collaborator_info
             
-            # Print collaborator information
-            print("\nKey Collaborators:")
-            print(f"Major Authors: {', '.join(collaborator_info['major_authors'])}")
-            print(f"Frequent Collaborators: {', '.join(collaborator_info['frequent_collaborators'])}")
+            # Print collaborator panel
+            collaborator_panel = Panel(
+                "\n".join([
+                    "[bold]Primary Co-Authors:[/bold]",
+                    "  " + ", ".join(collaborator_info['primary_collaborators']),
+                    "",
+                    "[bold]Frequent Collaborators:[/bold]",
+                    "  " + ", ".join(collaborator_info['frequent_collaborators'])
+                ]),
+                title="Collaborations",
+                border_style="blue"
+            )
+            console.print(collaborator_panel)
+            
         except Exception as e:
-            print(f"[ERROR] Failed to generate summary for topic {topic}: {e}")
+            console.print(f"[red]Error generating summary for {topic}: {e}[/red]")
             final_summaries[topic] = "Error generating summary"
             final_paper_summaries[topic] = {}
             final_collaborators[topic] = {}
@@ -728,17 +815,19 @@ def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: i
     with open(manager.final_summaries_file, "w") as f:
         json.dump(final_summaries, f, indent=4)
 
-    # Convert to Topic objects with collaborator information
-    topics: List[Topic] = []
-    for topic_name, topic_papers in topic_groups.items():
-        topic = Topic(
+    # Convert to Topic objects
+    topics = [
+        Topic(
             name=topic_name,
             papers=topic_papers,
             summary=final_summaries[topic_name],
             paper_summaries=final_paper_summaries[topic_name],
             collaborators=final_collaborators[topic_name]
         )
-        topics.append(topic)
+        for topic_name, topic_papers in topic_groups.items()
+    ]
+    
+    for topic in topics:
         manager.save_topic(topic)
     
     return topics
@@ -789,8 +878,8 @@ def generate_narrative(topics: List[Topic]) -> str:
         # Add collaborator insights
         if topic.collaborators:
             narrative += "Key Technical Collaborations:\n"
-            if topic.collaborators.get('major_authors'):
-                narrative += f"- Led joint technical development with: {', '.join(topic.collaborators['major_authors'])}\n"
+            if topic.collaborators.get('primary_collaborators'):
+                narrative += f"- Led joint technical development with: {', '.join(topic.collaborators['primary_collaborators'])}\n"
             if topic.collaborators.get('frequent_collaborators'):
                 narrative += f"- Sustained technical partnerships with: {', '.join(topic.collaborators['frequent_collaborators'])}\n"
             narrative += "\n"
@@ -810,79 +899,111 @@ def generate_narrative(topics: List[Topic]) -> str:
 
     return narrative
 
+def validate_author_name(name: str) -> Tuple[bool, str]:
+    """
+    Validate an author name and return if it's valid and any warning message.
+    
+    Returns:
+        Tuple of (is_valid: bool, warning_message: str)
+    """
+    parts = name.split()
+    
+    # Must have at least two parts (first and last name)
+    if len(parts) < 2:
+        return False, f"Single word name: '{name}'"
+        
+    # Check for common error patterns
+    error_patterns = [
+        r'^\d',  # Numbers at start of name
+        r'(?i)^(dr|prof|mr|ms|mrs|md|phd|university|institute|hospital|center|dept|department)\b',  # Titles or institutions
+        r'(?i)@|\.com|\.edu',  # Email-like patterns
+    ]
+    
+    for pattern in error_patterns:
+        if any(re.search(pattern, part) for part in parts):
+            return False, f"Contains invalid patterns: '{name}'"
+    
+    # Allow names with middle initials (e.g., "John A. Smith" or "John A Smith")
+    # First and last name should be longer than 1 character
+    if len(parts[0]) <= 1 or len(parts[-1]) <= 1:
+        return False, f"First or last name too short: '{name}'"
+    
+    return True, ""
+
 def extract_authors(text: str, llm) -> List[str]:
     """Extract author names from text using LLM."""
     prompt = ChatPromptTemplate.from_template("""
-        Extract the full list of authors from this text. Authors may be listed in various formats:
-        - First Last
-        - Last, First
-        - With titles (Dr., Prof., etc.)
-        - With affiliations
-        - With symbols for corresponding authors
-        - With footnotes for equal contribution
-        - With department/institution numbers (e.g., ¹, ², etc.)
+        Extract the COMPLETE author names from this text. Authors may be listed in various formats.
         
-        Look for:
-        - Author lists at the start of the paper
-        - Corresponding author notations
-        - Equal contribution footnotes
-        - Author sections or blocks
+        Requirements:
+        1. Each name MUST have both first and last name components
+        2. Convert all names to "First [Middle] Last" format
+        3. Remove all titles (Dr., Prof., PhD, etc.)
+        4. Remove all affiliations and numbers
+        5. Keep middle names/initials if present
+        6. Expand any abbreviated first names if found in the text
         
         Text: {text}
         
-        Return ONLY a JSON array of author names in "First Last" format, like this:
-        ["John Smith", "Jane Doe"]
+        Return ONLY a JSON array of complete author names, like this:
+        ["John Andrew Smith", "Maria R Rodriguez", "David Michael Chang"]
         
-        Important:
-        - Include all authors in the order they appear
-        - Remove affiliations, numbers, and symbols
-        - Keep the names in a consistent format
-        - If no authors are found, return an empty array: []
+        Critical rules:
+        - Never include single-word names or just last names
+        - Always look for full first names when only initials are given
+        - If a name seems incomplete, search the full text for the complete version
+        - If you can't find a complete name, skip it
+        - If no valid authors are found, return an empty array: []
     """)
     
     try:
         result = llm.invoke(prompt.format(text=text)).content.strip()
-        # Extract JSON array from response (in case there's additional text)
         json_match = re.search(r'\[.*\]', result, re.DOTALL)
         if json_match:
             result = json_match.group(0)
-        return json.loads(result)
-    except (json.JSONDecodeError, AttributeError) as e:
-        print(f"[ERROR] Failed to parse authors: {e}")
-        print(f"[DEBUG] Raw LLM response:\n{result}")
+        authors = json.loads(result)
+        
+        # Validate each author name
+        validated_authors = []
+        for author in authors:
+            is_valid, warning = validate_author_name(author)
+            if is_valid:
+                validated_authors.append(author)
+            else:
+                console.print(f"[yellow]Skipping invalid author: {warning}[/yellow]")
+        
+        if not validated_authors:
+            console.print("[red]Warning: No valid authors found in text[/red]")
+        
+        return validated_authors
+    except Exception as e:
+        console.print(f"[red]Error extracting authors: {e}[/red]")
         return []
 
 def run_pdf_summarization(config: dict = None):
     """Main function to run the PDF summarization pipeline with configuration."""
-    # Merge provided config with defaults
     cfg = DEFAULT_CONFIG.copy()
     if config:
         cfg.update(config)
     
-    # Initialize OpenAI client
-    llm = ChatOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        model=cfg["MODEL_NAME"],
-        temperature=cfg["MODEL_TEMPERATURE"]
-    )
+    console.print(f"[cyan]Starting PDF summarization from: {cfg['PDF_FOLDER']}[/cyan]")
+    console.print(f"[cyan]Analyzing contributions for: {cfg['AUTHOR_NAME']}[/cyan]")
     
-    # Initialize manager with configured output directory
-    manager = ResearchSummaryManager(output_dir=cfg["OUTPUT_DIR"])
+    with console.status("[bold green]Processing...") as status:
+        topics = summarize_pdfs_from_folder(
+            pdfs_folder=cfg["PDF_FOLDER"],
+            author_name=cfg["AUTHOR_NAME"],
+            num_topics=cfg["NUM_TOPICS"],
+            status=status
+        )
+        
+        status.update("[bold green]Generating final narrative...")
+        narrative = generate_narrative(topics)
+        
+        manager = ResearchSummaryManager(output_dir=cfg["OUTPUT_DIR"])
+        manager.save_final_narrative(narrative)
     
-    print(f"[START] Summarizing PDFs from folder: {cfg['PDF_FOLDER']}")
-    print(f"[CONFIG] Analyzing contributions for author: {cfg['AUTHOR_NAME']}")
-    
-    topics = summarize_pdfs_from_folder(
-        pdfs_folder=cfg["PDF_FOLDER"],
-        author_name=cfg["AUTHOR_NAME"],
-        num_topics=cfg["NUM_TOPICS"]
-    )
-    
-    # Generate and save narrative
-    narrative = generate_narrative(topics)
-    manager.save_final_narrative(narrative)
-    
-    print("[DONE] Processing complete. Narrative generated successfully.")
+    console.print("[bold green]✓[/bold green] Processing complete!")
     return topics, narrative
 
 if __name__ == "__main__":
