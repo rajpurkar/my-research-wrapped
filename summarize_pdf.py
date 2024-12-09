@@ -42,7 +42,6 @@ def setup_logging():
         level=logging.INFO,
         format=log_format,
         handlers=[
-            logging.FileHandler('pdf_summarizer.log'),
             logging.StreamHandler()
         ]
     )
@@ -157,40 +156,45 @@ PROMPTS = {
     Use "We" to describe our work, as this is authored by the researcher of interest.
     """,
     
-    "CLUSTERING": """
-    You will be provided with a list of research paper summaries along with their weights.
-    Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
+    "CLUSTERING": """Group these papers into {num_topics} cohesive research themes that highlight our key technical innovations and methodological advances.
+
+Papers:
+{papers}
+
+Requirements:
+1. Each paper MUST be assigned to EXACTLY ONE topic
+2. Each topic should have between {min_papers} and {max_papers} papers
+3. Target number of papers per topic is {target_per_topic:.1f}
+4. Ensure at least one major paper (weight 1.0) per topic if possible
+
+Guidelines for topic names:
+1. Make a clear, declarative statement about our specific technical innovation and its impact
+2. Focus on the shared methodological approach or technical framework
+3. Highlight the key advance or capability we enabled
+4. Use natural language (no underscores)
+5. Be specific enough to distinguish from other topics
+6. Include both the technical method and its application/impact
+
+Good topic names:
+- "Transformer Models Achieve Human Expert Performance in Medical Diagnosis"
+- "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
+- "Multimodal Foundation Models Unify Clinical Tasks Across Specialties"
+
+Bad topic names:
+- "Medical AI" (too vague, no specific claim)
+- "Advancing Drug Discovery through AI" (unclear technical approach)
+- "Deep Learning Research" (not focused on specific innovation)
+- "Clinical_NLP_Advances" (uses underscores, not a clear claim)
+
+When clustering:
+1. Look for papers that share core technical approaches (e.g., specific model architectures, training methods)
+2. Group papers that build on the same foundational innovation
+3. Consider how papers advance a unified research narrative
+4. Ensure each topic represents a distinct technical contribution
+
+Return ONLY a JSON object with topic names as keys and paper indices as values.
+Each paper index should appear exactly once across all topics.""",
     
-    Papers:
-    {papers}
-    
-    Requirements:
-    1. Each paper MUST be assigned to EXACTLY ONE topic - no paper can appear in multiple topics
-    2. Each topic should have between {min_papers} and {max_papers} papers
-    3. Target number of papers per topic is {target_per_topic:.1f}
-    4. Ensure at least one major paper (weight 1.0) per topic if possible
-    
-    Guidelines for topic names:
-    1. Make a clear, declarative statement about our research contribution
-    2. Focus on our specific technical innovations and their impact
-    3. Use natural language (no underscores)
-    4. Emphasize our novel methodology and its demonstrated benefits
-    
-    Bad topic names:
-    - Too vague (just stating a field)
-    - Not making a specific claim
-    - Not mentioning technical approach
-    - Using technical notation or jargon
-    
-    Each topic should:
-    - Make a specific claim about our technical innovation
-    - Focus on our shared methodological advances
-    - Be distinct from other topics to avoid overlap
-    
-    Return ONLY a JSON object with topic names as keys and paper indices as values.
-    Each paper index should appear exactly once across all topics.
-    Use "We" to describe our work, as these are all papers by the researcher of interest.
-    """,
     "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
 
 Papers:
@@ -420,7 +424,7 @@ Original names:
 {name}
 
 Return ONLY the normalized names, one per line.""",
-            "CLUSTERING": """Group these papers into {num_topics} distinct research topics.
+            "CLUSTERING": """Group these papers into {num_topics} cohesive research themes that highlight our key technical innovations and methodological advances.
 
 Papers:
 {papers}
@@ -432,10 +436,29 @@ Requirements:
 4. Ensure at least one major paper (weight 1.0) per topic if possible
 
 Guidelines for topic names:
-1. Make a clear, declarative statement about our research contribution
-2. Focus on our specific technical innovations and their impact
-3. Use natural language (no underscores)
-4. Emphasize our novel methodology and its demonstrated benefits
+1. Make a clear, declarative statement about our specific technical innovation and its impact
+2. Focus on the shared methodological approach or technical framework
+3. Highlight the key advance or capability we enabled
+4. Use natural language (no underscores)
+5. Be specific enough to distinguish from other topics
+6. Include both the technical method and its application/impact
+
+Good topic names:
+- "Transformer Models Achieve Human Expert Performance in Medical Diagnosis"
+- "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
+- "Multimodal Foundation Models Unify Clinical Tasks Across Specialties"
+
+Bad topic names:
+- "Medical AI" (too vague, no specific claim)
+- "Advancing Drug Discovery through AI" (unclear technical approach)
+- "Deep Learning Research" (not focused on specific innovation)
+- "Clinical_NLP_Advances" (uses underscores, not a clear claim)
+
+When clustering:
+1. Look for papers that share core technical approaches (e.g., specific model architectures, training methods)
+2. Group papers that build on the same foundational innovation
+3. Consider how papers advance a unified research narrative
+4. Ensure each topic represents a distinct technical contribution
 
 Return ONLY a JSON object with topic names as keys and paper indices as values.
 Each paper index should appear exactly once across all topics.""",
@@ -1164,22 +1187,6 @@ class StatusDisplay:
     def success(self, message: str):
         """Display a success message."""
         self.console.print(f"[green]{message}[/green]")
-
-# After the imports, add logging configuration
-def setup_logging():
-    """Configure logging with timestamps and levels"""
-    log_format = '%(asctime)s - %(levelname)s - %(message)s'
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[
-            logging.FileHandler('pdf_summarizer.log'),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
-
-logger = setup_logging()
 
 def extract_text_from_pdf(pdf_file: str) -> str:
     """Extract text from a PDF file."""
