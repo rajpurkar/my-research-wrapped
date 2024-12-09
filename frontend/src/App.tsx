@@ -118,6 +118,15 @@ function App() {
           <h1>ResearchYearWrapped 🎁</h1>
           <div className="header-meta">
             <span className="year-tag">2024</span>
+            <iframe
+              src="https://ghbtns.com/github-btn.html?user=rajpurkar&repo=my-research-wrapped&type=star&count=true"
+              frameBorder="0"
+              scrolling="0"
+              width="150"
+              height="20"
+              title="GitHub Stars"
+              style={{ marginLeft: '16px' }}
+            />
           </div>
         </div>
       </header>
