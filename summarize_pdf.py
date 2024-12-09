@@ -368,9 +368,20 @@ def calculate_paper_weight(authors: List[str], your_name: str = "Pranav Rajpurka
 
 def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict[str, List[Paper]]:
     """Group papers into topics using LLM-based classification."""
+    # Calculate target papers per topic
+    total_papers = len(papers)
+    target_per_topic = total_papers / num_topics
+    min_papers = max(1, int(target_per_topic * 0.7))  # Allow 30% fewer than target
+    max_papers = int(target_per_topic * 1.3)  # Allow 30% more than target
+    
     clustering_prompt = f"""
     You will be provided with a list of research paper summaries along with their weights.
     Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
+    
+    Distribution requirements:
+    - Each topic should have between {min_papers} and {max_papers} papers
+    - Target number of papers per topic is {target_per_topic:.1f}
+    - Ensure at least one major paper (weight 1.0) per topic if possible
     
     Guidelines for topic names:
     1. Make a clear, declarative statement about the research contribution
@@ -386,8 +397,6 @@ def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict
     
     Each topic should:
     - Make a specific claim about technical innovation
-    - Group 2-4 papers that support this claim
-    - Include at least one major paper (weight 1.0)
     - Focus on shared methodological advances
     
     Return ONLY a JSON object with topic names as keys and paper indices as values, like this:
@@ -413,6 +422,12 @@ def group_papers_by_topic(papers: List[Paper], llm, num_topics: int = 5) -> Dict
             clustering_result = json_match.group(0)
         
         topic_groups_indices = json.loads(clustering_result)
+        
+        # Validate distribution
+        for topic, indices in topic_groups_indices.items():
+            if len(indices) < min_papers or len(indices) > max_papers:
+                print(f"[yellow]Warning: Topic '{topic}' has {len(indices)} papers, outside target range of {min_papers}-{max_papers}[/yellow]")
+        
     except (json.JSONDecodeError, AttributeError) as e:
         print(f"[ERROR] Failed to parse clustering result: {e}")
         print(f"[DEBUG] Raw clustering result:\n{clustering_result}")
