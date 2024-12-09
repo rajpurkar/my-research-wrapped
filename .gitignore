@@ -14,8 +14,10 @@ docker-compose.yml
 # Python
 .pytest_cache
 
-*.json
 *.pdf
 *.txt
 *.csv
 .pyc
+
+outputs/
+dist/
