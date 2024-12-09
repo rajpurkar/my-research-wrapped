@@ -17,6 +17,7 @@ from langchain_openai import OpenAIEmbeddings
 import numpy as np
 import logging
 import traceback
+import csv
 from datetime import datetime
 import shutil
 
@@ -51,6 +52,14 @@ class ResearchArea(TypedDict):
 
 class ClusteringOutput(TypedDict):
     research_areas: List[ResearchArea]
+
+class TopicOutput(TypedDict):
+    name: str  # The main topic name
+    description: str  # The contextual description
+    synthesis: str  # The detailed synthesis of papers
+
+class SynthesisOutput(TypedDict):
+    synthesis: str  # The detailed synthesis of papers
 
 # Configure logging
 def setup_logging():
@@ -219,12 +228,12 @@ Return a list of research areas, where each area has:
 
 IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
     
-    "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
+    "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area: {name}
 
 Papers:
 {context}
 
-Guidelines:
+Guidelines for synthesis:
 1. Present our work's role in advancing this technical area
 2. Reference papers concisely by:
    - Method names when notable (e.g., "The model achieved...")
@@ -236,39 +245,39 @@ Guidelines:
 5. Use "we" and "our" naturally without being overly promotional
 6. Write in a technical yet accessible style
 
-Structure each synthesis to:
+Structure the synthesis to:
 - Open with the area's technical significance
 - Detail key methodological advances
 - Present quantitative results and impact
 - Show connections between different approaches
 - Balance confidence with objectivity
 
-Example:
+Example style:
 "We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
 
 Keep the tone confident but grounded, focusing on concrete technical achievements.""",
     
-    "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
+    "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
 
 Guidelines:
-1. Frame our work's contribution to advancing the field
-2. Present our innovations in addressing key technical challenges
-3. Show how research areas complement each other
-4. Balance enthusiasm with objectivity
+1. Open with our SPECIFIC technical contributions and innovations
+2. Focus on CONCRETE methodological advances and quantitative results
+3. Show how different technical approaches complement each other
+4. Maintain technical precision while being accessible
 
-Key Style Elements:
+Key Requirements:
+- Start with "Our research advances..." or similar active framing
+- Name specific technical innovations or methodologies in first paragraph
+- Include at least one quantitative result or metric
+- Focus on methodological contributions rather than general impact
 - Use first-person plural ("we", "our") naturally
-- Focus on concrete technical achievements
-- Connect advances to real challenges
-- Maintain technical precision
-- Balance confidence with humility
+- Balance technical detail with clarity
 
 Example Style:
-"Our research focuses on developing robust and adaptable AI systems that can handle complex real-world tasks. Through advances in uncertainty quantification and multi-modal learning, we've developed approaches that help bridge the gap between specialized models and flexible reasoning.
+"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
 
-Our work spans several technical areas, from uncertainty estimation in high-stakes applications to integrating diverse data types. These complementary advances work together to improve the reliability and capability of AI systems..."
-
-Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
+Keep the narrative focused on specific technical achievements while maintaining accessibility.
+""",
 }
 
 # Base Classes
@@ -476,12 +485,12 @@ Return a list of research areas, where each area has:
 2. A list of paper indices that belong to that area
 
 IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
-            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
+            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area: {name}
 
 Papers:
 {context}
 
-Guidelines:
+Guidelines for synthesis:
 1. Present our work's role in advancing this technical area
 2. Reference papers concisely by:
    - Method names when notable (e.g., "The model achieved...")
@@ -493,33 +502,38 @@ Guidelines:
 5. Use "we" and "our" naturally without being overly promotional
 6. Write in a technical yet accessible style
 
-Structure each synthesis to:
+Structure the synthesis to:
 - Open with the area's technical significance
 - Detail key methodological advances
 - Present quantitative results and impact
 - Show connections between different approaches
 - Balance confidence with objectivity
 
-Example:
+Example style:
 "We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
 
 Keep the tone confident but grounded, focusing on concrete technical achievements.""",
-            "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
+            "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
 
 Guidelines:
-1. Frame our work's contribution to advancing the field
-2. Present our innovations in addressing key technical challenges
-3. Show how research areas complement each other
-4. Balance enthusiasm with objectivity
+1. Open with our SPECIFIC technical contributions and innovations
+2. Focus on CONCRETE methodological advances and quantitative results
+3. Show how different technical approaches complement each other
+4. Maintain technical precision while being accessible
 
-Key Style Elements:
+Key Requirements:
+- Start with "Our research advances..." or similar active framing
+- Name specific technical innovations or methodologies in first paragraph
+- Include at least one quantitative result or metric
+- Focus on methodological contributions rather than general impact
 - Use first-person plural ("we", "our") naturally
-- Focus on concrete technical achievements
-- Connect advances to real challenges
-- Maintain technical precision
-- Balance confidence with humility
+- Balance technical detail with clarity
 
-Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
+Example Style:
+"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
+
+Keep the narrative focused on specific technical achievements while maintaining accessibility.
+""",
         }
         # Create prompt templates
         self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in self.prompts.items()}
@@ -1052,15 +1066,19 @@ def create_topic_synthesis(
         for ps in sorted_summaries
     ]
     
-    synthesis = llm_processor.invoke(
-        "TOPIC_SYNTHESIS",
-        context=summaries_context
+    # Use structured output for synthesis only
+    structured_llm = llm_processor.llm.with_structured_output(SynthesisOutput)
+    synthesis_output = structured_llm.invoke(
+        llm_processor.prompts["TOPIC_SYNTHESIS"].format(
+            name=name,
+            context=summaries_context
+        )
     )
     
     return TopicSynthesis(
-        name=name,
+        name=name,  # Use the existing topic name
         paper_summaries=sorted_summaries,
-        synthesis=synthesis
+        synthesis=synthesis_output["synthesis"]
     )
 
 def generate_overall_narrative(
@@ -1283,8 +1301,33 @@ def run_pdf_summarization(
             progress.update(task_narrative, completed=1)
         
         # Save narrative
-        with open(manager.narrative_path, "w") as f:
-            f.write(narrative)
+        narrative_json = {
+            "introduction": narrative.split("\n\n")[0],  # First paragraph is intro
+            "topics": []
+        }
+
+        # Parse the narrative into sections
+        sections = narrative.split("\n\n## ")
+        if len(sections) > 1:
+            for section in sections[1:]:  # Skip intro
+                if section.strip():
+                    parts = section.split("\n\n", 1)
+                    if len(parts) == 2:
+                        topic_name_full, topic_content = parts
+                        # Split topic name into title and description
+                        topic_parts = topic_name_full.split('\n', 1)
+                        topic_name = topic_parts[0].strip()
+                        # If there's a description, prepend it to the content
+                        if len(topic_parts) > 1:
+                            topic_content = topic_parts[1].strip() + "\n\n" + topic_content
+                        narrative_json["topics"].append({
+                            "name": topic_name,
+                            "content": topic_content.strip()
+                        })
+
+        # Save as JSON
+        with open(manager.narrative_path.with_suffix('.json'), "w", encoding='utf-8') as f:
+            json.dump(narrative_json, f, indent=2, ensure_ascii=False)
         
         # Generate CSV summary
         generate_csv_summary(
