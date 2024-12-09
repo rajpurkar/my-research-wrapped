@@ -17,3 +17,4 @@ docker-compose.yml
 *.json
 *.pdf
 *.txt
+*.csv

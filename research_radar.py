@@ -19,7 +19,6 @@ import logging
 import traceback
 from datetime import datetime
 import shutil
-import csv
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -36,6 +35,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+
+# Import configuration
+from config import DEFAULT_CONFIG, load_config, get_output_paths
 
 class PaperAnalysis(TypedDict):
     title: str
@@ -95,29 +97,6 @@ logger = setup_logging()
 
 # Initialize rich console for global use
 console = Console()
-
-# Configuration Constants
-DEFAULT_CONFIG = {
-    # Author settings
-    "AUTHOR_NAME": "Pranav Rajpurkar",
-    
-    # Model settings
-    "MODEL_NAME": "gpt-4o-mini",
-    "MODEL_TEMPERATURE": 0.1,
-    
-    # Directory settings
-    "PDF_FOLDER": "pdfs",
-    "OUTPUT_DIR": "outputs",  # Single outputs directory
-    
-    # Processing settings
-    "NUM_TOPICS": 5,
-    "MAX_WORKERS": 32,  # Increased for faster processing
-    
-    # Cache settings
-    "CACHE_VERSION": "2.0",
-    # Add CSV output path
-    "CSV_OUTPUT": "outputs/research_summary.csv",
-}
 
 # Load environment variables from .env file
 load_dotenv()
@@ -1200,10 +1179,9 @@ def run_pdf_summarization(
 ) -> Tuple[List[TopicSummary], str]:
     """Main function to run the PDF summarization pipeline."""
     try:
-        # Load configuration
-        cfg = DEFAULT_CONFIG.copy()
-        if config:
-            cfg.update(config)
+        # Load and validate configuration
+        cfg = load_config(config)
+        output_paths = get_output_paths(cfg)
         
         logger.info("[bold blue]Starting PDF summarization pipeline[/bold blue]")
         logger.info(f"Source directory: [cyan]{cfg['PDF_FOLDER']}[/cyan]")
@@ -1224,45 +1202,6 @@ def run_pdf_summarization(
             llm_processor=llm_processor
         )
         
-        # Create prompt templates
-        clustering_prompt = ChatPromptTemplate.from_template("""Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
-
-Papers:
-{papers}
-
-Requirements:
-1. Each research area MUST have AT LEAST 3 papers and no more than {max_papers} papers
-2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
-3. Target number of papers per topic is {target_per_topic:.1f}
-4. EVERY paper must be assigned to exactly one research area
-5. Balance the distribution of papers across areas
-
-Research Area Name Guidelines:
-1. Create a specific, technical name that captures the shared innovation
-2. Include both the methodology and its impact/application
-3. Use active verbs and concrete technical terms
-4. Highlight the transformative aspect of the work
-
-Examples of good research area names:
-- "Deep Learning Architectures Transform Visual Understanding"
-- "Novel Validation Methods Enable Reliable AI Systems"
-- "Multi-Modal Foundation Models Advance Decision Support"
-- "Self-Supervised Learning Enhances Representation Quality"
-- "Automated Analysis Systems Improve Data Processing"
-
-Bad examples:
-- "AI Applications" (too vague)
-- "Computer Vision" (not specific to innovation)
-- "Improving Performance" (not technical)
-- "Deep_Learning_Research" (uses underscores)
-- "Novel Methods" (not descriptive)
-
-Return a list of research areas, where each area has:
-1. A specific, technical name
-2. A list of paper indices that belong to that area
-
-IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""")
-
         # Get PDF files
         pdf_files = glob.glob(os.path.join(cfg["PDF_FOLDER"], "*.pdf"))
         if not pdf_files:

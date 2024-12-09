@@ -1,164 +1,111 @@
-# Research Paper Summarizer
+# ResearchRadar 🎯
 
-A powerful tool to automatically summarize and analyze collections of research papers, particularly useful for researchers wanting to organize and understand their publication history or research contributions.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-## Features
+ResearchRadar is an AI-powered tool that transforms how researchers understand and present their academic contributions. By analyzing your research papers, it automatically discovers meaningful patterns, generates insightful summaries, and weaves your work into a cohesive narrative.
 
-- 📚 Bulk PDF Processing: Process multiple research papers simultaneously
-- 🎯 Smart Author Detection: Automatically identifies and normalizes author names
-- 📊 Topic Clustering: Groups related papers into coherent research themes
-- 💡 Intelligent Summarization: Generates concise technical summaries of papers and research areas
-- 🔄 Caching System: Efficient caching with version control for faster subsequent runs
-- 🎨 Rich Terminal Output: Beautiful progress indicators and formatted output
+## Why ResearchRadar?
 
-## Prerequisites
+Traditional paper organization is time-consuming and often misses the bigger picture. ResearchRadar changes this by using advanced AI to analyze your entire body of work at once. It identifies research themes, tracks your methodological evolution, and helps you understand your impact across different areas.
 
-- Python 3.8 or higher
-- OpenAI API key
-- PDF files of research papers
+The tool excels at finding connections between papers that might not be immediately obvious. Using semantic analysis and topic modeling, it groups related work into meaningful research areas, making it perfect for:
 
-## Installation
+- Preparing research statements or tenure packages
+- Understanding your research trajectory
+- Identifying emerging themes in your work
+- Creating compelling research narratives
 
-1. Clone this repository:
+## Getting Started
+
+Setting up ResearchRadar is straightforward:
+
 ```bash
-git clone [your-repo-url]
-cd [repo-name]
-```
-
-2. Create and activate a virtual environment:
-```bash
+# Clone and set up the environment
+git clone https://github.com/pranavrajpurkar/research-radar.git
+cd research-radar
 python -m venv venv
-source venv/bin/activate  # On Windows, use: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# Configure your environment
+cp .env.example .env
+# Add your OpenAI API key to .env
+
+# Run the analysis
+python research_radar.py
 ```
 
-3. Install the required dependencies:
-```bash
-pip install langchain langchain-openai python-dotenv rich
-```
+## How It Works
 
-4. Create a `.env` file in the project root and add your OpenAI API key:
-```
-OPENAI_API_KEY=your-api-key-here
-```
+ResearchRadar processes your research papers in three main stages:
 
-## Directory Structure
+1. **Analysis**: Each paper is processed using advanced language models to extract key information, normalize author names, and identify core contributions.
 
-```
-.
-├── pdfs/              # Place your PDF files here
-├── outputs/           # Generated outputs
-│   ├── cache/        # Cached processing results
-│   ├── summaries/    # Individual paper summaries
-│   ├── papers/       # Processed paper data
-│   ├── topics/       # Topic-based groupings
-│   └── data/         # Additional analysis data
-├── summarize_pdf.py   # Main script
-├── .env              # Environment variables
-└── README.md
-```
+2. **Synthesis**: Papers are grouped into research themes using semantic similarity and topic modeling, ensuring each area represents a coherent line of work.
+
+3. **Narrative**: The tool generates a flowing narrative that connects your research areas, highlighting methodological advances and impact.
 
 ## Configuration
 
-The tool uses a configuration system defined in `DEFAULT_CONFIG`:
+ResearchRadar is highly configurable through `config.py`. Here are the key settings:
 
 ```python
 DEFAULT_CONFIG = {
-    # Author settings
-    "AUTHOR_NAME": "Your Name",
-    
-    # Model settings
-    "MODEL_NAME": "gpt-4o-mini",
-    "MODEL_TEMPERATURE": 0.1,
-    
-    # Directory settings
-    "PDF_FOLDER": "pdfs",
-    "OUTPUT_DIR": "outputs",
-    
-    # Processing settings
-    "NUM_TOPICS": 5,
-    "MAX_WORKERS": 16,
-    
-    # Cache settings
-    "CACHE_VERSION": "2.0",
+    "AUTHOR_NAME": "Your Name",     # Target author for analysis
+    "NUM_TOPICS": 5,                # Number of research areas to identify
+    "MAX_WORKERS": 16,              # Parallel processing threads
 }
 ```
 
-## Usage
+## Output Structure
 
-1. Place your research papers (PDFs) in the `pdfs/` directory.
+The tool generates a comprehensive analysis in the `outputs` directory:
 
-2. Run the script:
-```bash
-python summarize_pdf.py
 ```
-
-The script will:
-- Process all PDFs in parallel using ThreadPoolExecutor
-- Generate technical summaries for each paper
-- Group papers into coherent research topics
-- Create a flowing narrative connecting the research themes
-- Cache results for faster subsequent runs
-
-## Output Files
-
-The tool generates several types of output in the `outputs/` directory:
-
-- `cache/`: Cached processing results with version control
-- `papers/`: Individual paper data and summaries
-- `topics/`: Topic-based groupings and analyses
-- `data/`: Processing metadata and partial results
-- `year_in_review_narrative.txt`: Overall research narrative
+outputs/
+├── papers/                 # Individual paper analyses
+├── topics/                # Research area summaries
+├── research_summary.csv   # Tabulated overview
+└── year_in_review.txt     # Narrative synthesis
+```
 
 ## Advanced Features
 
-### Author Name Normalization
-- Intelligent handling of author names
-- Removes titles, middle names, and special characters
-- Maintains consistent capitalization
+### Smart Author Detection
+ResearchRadar uses AI to handle the complexities of author names, accounting for variations in formatting, special characters, and academic titles. This ensures consistent author tracking across your publications.
 
-### Topic Clustering
-- Groups papers into coherent research themes
-- Ensures balanced topic distribution
-- Generates technical narratives connecting papers
+### Topic Analysis
+The semantic clustering algorithm identifies research themes while maintaining balance - ensuring each area has enough papers to be meaningful, but not so many that distinct contributions are lost.
 
-### Caching System
-- Version-controlled caching
-- Efficient reprocessing of modified files
-- Maintains processing state across runs
+### Performance Optimization
+The tool includes smart caching and parallel processing, making it efficient even with large paper collections. Changes to individual papers trigger selective reprocessing, saving time on subsequent runs.
 
 ## Troubleshooting
 
-Common issues and solutions:
+If you encounter issues:
 
-1. **API Key Issues**
-   - Ensure your OpenAI API key is correctly set in the `.env` file
-   - Check that python-dotenv is properly installed
-
-2. **PDF Processing Errors**
-   - Verify PDFs are text-searchable
-   - Check file permissions
-   - Ensure PDFs are not corrupted
-
-3. **Memory Issues**
-   - Adjust `MAX_WORKERS` in configuration
-   - Process fewer PDFs at a time
-
-4. **Cache Issues**
-   - Clear the `outputs/cache/` directory if experiencing inconsistencies
-   - Check `CACHE_VERSION` in configuration
+1. **API Access**: Verify your OpenAI API key is correctly set in `.env`
+2. **PDF Processing**: Ensure your PDFs are text-searchable
+3. **Performance**: Adjust `MAX_WORKERS` in config.py if needed
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+We welcome contributions! If you'd like to improve ResearchRadar:
+
+1. Fork the repository
+2. Create your feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## License
 
-[Your chosen license]
+Copyright (c) 2024 Pranav Rajpurkar. This project is [MIT](./LICENSE) licensed.
 
 ## Acknowledgments
 
-This tool uses several open-source libraries:
-- LangChain for AI interactions
-- PyPDF for PDF processing
-- Rich for terminal output formatting
-- python-dotenv for environment management
+ResearchRadar builds on these excellent open-source projects:
+- [LangChain](https://github.com/hwchase17/langchain) for AI orchestration
+- [OpenAI](https://github.com/openai/openai-python) for language models
+- [Rich](https://github.com/Textualize/rich) for beautiful terminal output
