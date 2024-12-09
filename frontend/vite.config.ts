@@ -8,7 +8,7 @@ const __dirname = dirname(__filename)
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: '/your-research-wrapped/',  // Replace with your repository name
+  base: '/my-research-wrapped/',  // Replace with your repository name
   plugins: [react()],
   resolve: {
     alias: {

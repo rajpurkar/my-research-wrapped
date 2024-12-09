@@ -19,5 +19,7 @@ __pycache__
 *.txt
 *.csv
 .pyc
+config.js
+.tsbuildinfo
 
 dist/
