@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Helmet } from 'react-helmet-async'
 
 interface Author {
   full_name: string
@@ -113,6 +114,16 @@ function App() {
 
   return (
     <div className="app-container">
+      <Helmet>
+        <title>Research Year Wrapped 2024 | {narrative?.author || 'Loading...'}</title>
+        <meta name="description" content="An interactive visualization of research contributions and impact throughout the year." />
+        
+        {/* Open Graph / Social Media Meta Tags */}
+        <meta property="og:title" content={`Research Year Wrapped 2024 | ${narrative?.author || 'Loading...'}`} />
+        <meta property="og:description" content="An interactive visualization of research contributions and impact throughout the year." />
+        <meta property="og:type" content="website" />
+      </Helmet>
+
       <header className="app-header">
         <div className="header-content">
           <h1>ResearchYearWrapped 🎁</h1>
