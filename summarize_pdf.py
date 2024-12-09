@@ -13,9 +13,13 @@ from dataclasses import dataclass
 from collections import Counter, defaultdict
 import unicodedata
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_openai import OpenAIEmbeddings
+import numpy as np
 import logging
 import traceback
 from datetime import datetime
+import shutil
+import csv
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -38,6 +42,13 @@ class PaperAnalysis(TypedDict):
     authors: List[str]
     summary: str
     weight: float
+
+class ResearchArea(TypedDict):
+    name: str
+    paper_indices: List[int]
+
+class ClusteringOutput(TypedDict):
+    research_areas: List[ResearchArea]
 
 # Configure logging
 def setup_logging():
@@ -99,11 +110,13 @@ DEFAULT_CONFIG = {
     "OUTPUT_DIR": "outputs",  # Single outputs directory
     
     # Processing settings
-    "NUM_TOPICS": 4,  # Reduced from 5 to ensure at least 3 papers per topic with better distribution
+    "NUM_TOPICS": 5,
     "MAX_WORKERS": 32,  # Increased for faster processing
     
     # Cache settings
     "CACHE_VERSION": "2.0",
+    # Add CSV output path
+    "CSV_OUTPUT": "outputs/research_summary.csv",
 }
 
 # Load environment variables from .env file
@@ -189,108 +202,94 @@ PROMPTS = {
     Use "We" to describe our work, as this is authored by the researcher of interest.
     """,
     
-    "CLUSTERING": """Group these papers into {num_topics} cohesive research themes that highlight our key technical innovations and methodological advances.
+    "CLUSTERING": """Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
 
 Papers:
 {papers}
 
 Requirements:
-1. Each topic MUST have AT LEAST 3 papers and no more than {max_papers} papers
+1. Each research area MUST have AT LEAST 3 papers and no more than {max_papers} papers
 2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
 3. Target number of papers per topic is {target_per_topic:.1f}
-4. Ensure topics are broad enough to encompass multiple related papers
-5. Balance the distribution of papers across topics (avoid having some topics with many papers and others with few)
+4. EVERY paper must be assigned to exactly one research area
+5. Balance the distribution of papers across areas
 
-Guidelines for topic names:
-1. Make a clear, declarative statement about the shared technical innovation and its impact
-2. Focus on common methodological approaches or technical frameworks across multiple papers
-3. Highlight the key advances or capabilities enabled by the group of papers
-4. Use natural language (no underscores)
-5. Be specific enough to distinguish from other topics
-6. Include both the technical method and its application/impact
+Research Area Name Guidelines:
+1. Create a specific, technical name that captures the shared innovation
+2. Include both the methodology and its impact/application
+3. Use active verbs and concrete technical terms
+4. Highlight the transformative aspect of the work
 
-Good topic names:
-- "Transformer Models Advance Medical Diagnosis Through Multi-Modal Learning"
-- "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
-- "Foundation Models Transform Clinical Decision Support Systems"
+Examples of good research area names:
+- "Deep Learning Architectures Transform Visual Understanding"
+- "Novel Validation Methods Enable Reliable AI Systems"
+- "Multi-Modal Foundation Models Advance Decision Support"
+- "Self-Supervised Learning Enhances Representation Quality"
+- "Automated Analysis Systems Improve Data Processing"
 
-Bad topic names:
-- "Medical AI" (too vague)
-- "Improving Healthcare" (not technical enough)
-- "Deep Learning Research" (not focused)
-- "Clinical_NLP_Advances" (uses underscores)
-- "Novel Chest X-ray Analysis" (too specific to one paper)
+Bad examples:
+- "AI Applications" (too vague)
+- "Computer Vision" (not specific to innovation)
+- "Improving Performance" (not technical)
+- "Deep_Learning_Research" (uses underscores)
+- "Novel Methods" (not descriptive)
 
-When clustering:
-1. Look for papers that share core technical approaches (e.g., specific architectures, training methods)
-2. Group papers that build on similar foundational innovations
-3. Consider how papers advance a unified research narrative
-4. Ensure each topic represents a broad technical contribution area
-5. Avoid creating topics around single papers or very specific applications
+Return a list of research areas, where each area has:
+1. A specific, technical name
+2. A list of paper indices that belong to that area
 
-Return ONLY a JSON object with topic names as keys and paper indices as values.
-Each paper index should appear exactly once across all topics.
-Ensure each topic has at least 3 papers.""",
+IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
     
-    "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
+    "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
 
 Papers:
 {context}
 
 Guidelines:
-1. Start with a clear topic statement that frames our research direction
-2. Describe papers chronologically, referencing them by:
-   - Method/model name if introduced (e.g., "MedBERT achieved...")
-   - First author (e.g., "Chen et al. demonstrated...")
-   - Never use phrases like "In our first paper" or "Our next work"
-3. Highlight specific metrics, numbers, and results that demonstrate impact
-4. Connect papers to show progression of ideas and methods
-5. Use "We" to describe our work, as these are all papers by the researcher of interest
-6. Write in a narrative style suitable for a year-end research summary blog post
+1. Present our work's role in advancing this technical area
+2. Reference papers concisely by:
+   - Method names when notable (e.g., "The model achieved...")
+   - Brief descriptions (e.g., "Our approach to uncertainty quantification...")
+   - Never use full paper titles
+   - Never use chronological markers
+3. Highlight key technical innovations and results
+4. Show how different approaches complement each other
+5. Use "we" and "our" naturally without being overly promotional
+6. Write in a technical yet accessible style
 
-Write 2-3 paragraphs in a narrative style that:
-- Opens with a high-level framing of the research area
-- Shows how papers build on each other
-- Emphasizes quantitative impact and real-world significance
-- Uses concise paper references
-- Maintains an engaging, blog-post style tone while being technically precise""",
+Structure each synthesis to:
+- Open with the area's technical significance
+- Detail key methodological advances
+- Present quantitative results and impact
+- Show connections between different approaches
+- Balance confidence with objectivity
+
+Example:
+"We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
+
+Keep the tone confident but grounded, focusing on concrete technical achievements.""",
     
-    "OVERALL_NARRATIVE": """Create an introductory narrative that frames our research across these topics: {themes}
+    "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
 
-Write 3-4 paragraphs that:
-1. Open with a personal, engaging introduction about the year's research mission
-2. Frame the key challenges we're addressing in medical AI
-3. Introduce the major themes that our work spans
-4. Set up the detailed accomplishments that will follow
+Guidelines:
+1. Frame our work's contribution to advancing the field
+2. Present our innovations in addressing key technical challenges
+3. Show how research areas complement each other
+4. Balance enthusiasm with objectivity
 
-Example style:
-"As 2024 wraps up, I'm eager to share some research highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Major progress made this year brings us closer to that goal.
+Key Style Elements:
+- Use first-person plural ("we", "our") naturally
+- Focus on concrete technical achievements
+- Connect advances to real challenges
+- Maintain technical precision
+- Balance confidence with humility
 
-Our primary 2024 focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our Nature perspective with Eric Topol and colleagues, GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
+Example Style:
+"Our research focuses on developing robust and adaptable AI systems that can handle complex real-world tasks. Through advances in uncertainty quantification and multi-modal learning, we've developed approaches that help bridge the gap between specialized models and flexible reasoning.
 
-Use "We" to describe our work, as these are all papers by the researcher of interest.
-Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
+Our work spans several technical areas, from uncertainty estimation in high-stakes applications to integrating diverse data types. These complementary advances work together to improve the reliability and capability of AI systems..."
 
-The narrative should feel like a natural blog post introduction while maintaining technical precision.""",
-    "COMBINED_PAPER_ANALYSIS": """Analyze this academic paper and extract the following information in a structured format:
-1. Title: Extract the paper title
-2. Authors: List all authors with both first and last names
-3. Summary: Provide a focused technical summary that:
-   - Identifies the specific research problem addressed
-   - Describes the key technical innovation and methodological approach
-   - Highlights main empirical findings and quantitative results
-   - Uses 2-3 clear, concise sentences
-4. Impact Weight: Score from 0-1 based on paper significance
-
-Text: {text}
-
-Return a JSON object with these exact keys:
-{
-    "title": "string",
-    "authors": ["string"],
-    "summary": "string",
-    "weight": float
-}""",
+Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
 }
 
 # Base Classes
@@ -461,87 +460,87 @@ Original names:
 {name}
 
 Return ONLY the normalized names, one per line.""",
-            "CLUSTERING": """Group these papers into {num_topics} cohesive research themes that highlight our key technical innovations and methodological advances.
+            "CLUSTERING": """Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
 
 Papers:
 {papers}
 
 Requirements:
-1. Each topic MUST have AT LEAST 3 papers and no more than {max_papers} papers
+1. Each research area MUST have AT LEAST 3 papers and no more than {max_papers} papers
 2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
 3. Target number of papers per topic is {target_per_topic:.1f}
-4. Ensure topics are broad enough to encompass multiple related papers
-5. Balance the distribution of papers across topics (avoid having some topics with many papers and others with few)
+4. EVERY paper must be assigned to exactly one research area
+5. Balance the distribution of papers across areas
 
-Guidelines for topic names:
-1. Make a clear, declarative statement about the shared technical innovation and its impact
-2. Focus on common methodological approaches or technical frameworks across multiple papers
-3. Highlight the key advances or capabilities enabled by the group of papers
-4. Use natural language (no underscores)
-5. Be specific enough to distinguish from other topics
-6. Include both the technical method and its application/impact
+Research Area Name Guidelines:
+1. Create a specific, technical name that captures the shared innovation
+2. Include both the methodology and its impact/application
+3. Use active verbs and concrete technical terms
+4. Highlight the transformative aspect of the work
 
-Good topic names:
-- "Transformer Models Advance Medical Diagnosis Through Multi-Modal Learning"
-- "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
-- "Foundation Models Transform Clinical Decision Support Systems"
+Examples of good research area names:
+- "Deep Learning Architectures Transform Visual Understanding"
+- "Novel Validation Methods Enable Reliable AI Systems"
+- "Multi-Modal Foundation Models Advance Decision Support"
+- "Self-Supervised Learning Enhances Representation Quality"
+- "Automated Analysis Systems Improve Data Processing"
 
-Bad topic names:
-- "Medical AI" (too vague)
-- "Improving Healthcare" (not technical enough)
-- "Deep Learning Research" (not focused)
-- "Clinical_NLP_Advances" (uses underscores)
-- "Novel Chest X-ray Analysis" (too specific to one paper)
+Bad examples:
+- "AI Applications" (too vague)
+- "Computer Vision" (not specific to innovation)
+- "Improving Performance" (not technical)
+- "Deep_Learning_Research" (uses underscores)
+- "Novel Methods" (not descriptive)
 
-When clustering:
-1. Look for papers that share core technical approaches (e.g., specific architectures, training methods)
-2. Group papers that build on similar foundational innovations
-3. Consider how papers advance a unified research narrative
-4. Ensure each topic represents a broad technical contribution area
-5. Avoid creating topics around single papers or very specific applications
+Return a list of research areas, where each area has:
+1. A specific, technical name
+2. A list of paper indices that belong to that area
 
-Return ONLY a JSON object with topic names as keys and paper indices as values.
-Each paper index should appear exactly once across all topics.
-Ensure each topic has at least 3 papers.""",
-            "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
+IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
+            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
 
 Papers:
 {context}
 
 Guidelines:
-1. Start with a clear topic statement that frames our research direction
-2. Describe papers chronologically, referencing them by:
-   - Method/model name if introduced (e.g., "MedBERT achieved...")
-   - First author (e.g., "Chen et al. demonstrated...")
-   - Never use phrases like "In our first paper" or "Our next work"
-3. Highlight specific metrics, numbers, and results that demonstrate impact
-4. Connect papers to show progression of ideas and methods
-5. Use "We" to describe our work, as these are all papers by the researcher of interest
-6. Write in a narrative style suitable for a year-end research summary blog post
+1. Present our work's role in advancing this technical area
+2. Reference papers concisely by:
+   - Method names when notable (e.g., "The model achieved...")
+   - Brief descriptions (e.g., "Our approach to uncertainty quantification...")
+   - Never use full paper titles
+   - Never use chronological markers
+3. Highlight key technical innovations and results
+4. Show how different approaches complement each other
+5. Use "we" and "our" naturally without being overly promotional
+6. Write in a technical yet accessible style
 
-Write 2-3 paragraphs in a narrative style that:
-- Opens with a high-level framing of the research area
-- Shows how papers build on each other
-- Emphasizes quantitative impact and real-world significance
-- Uses concise paper references
-- Maintains an engaging, blog-post style tone while being technically precise""",
-            "OVERALL_NARRATIVE": """Create an introductory narrative that frames our research across these topics: {themes}
+Structure each synthesis to:
+- Open with the area's technical significance
+- Detail key methodological advances
+- Present quantitative results and impact
+- Show connections between different approaches
+- Balance confidence with objectivity
 
-Write 3-4 paragraphs that:
-1. Open with a personal, engaging introduction about the year's research mission
-2. Frame the key challenges we're addressing in medical AI
-3. Introduce the major themes that our work spans
-4. Set up the detailed accomplishments that will follow
+Example:
+"We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
 
-Example style:
-"As 2024 wraps up, I'm eager to share some research highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Major progress made this year brings us closer to that goal.
+Keep the tone confident but grounded, focusing on concrete technical achievements.""",
+            "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
 
-Our primary 2024 focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our Nature perspective with Eric Topol and colleagues, GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
+Guidelines:
+1. Frame our work's contribution to advancing the field
+2. Present our innovations in addressing key technical challenges
+3. Show how research areas complement each other
+4. Balance enthusiasm with objectivity
 
-Use "We" to describe our work, as these are all papers by the researcher of interest.
-Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
+Key Style Elements:
+- Use first-person plural ("we", "our") naturally
+- Focus on concrete technical achievements
+- Connect advances to real challenges
+- Maintain technical precision
+- Balance confidence with humility
 
-The narrative should feel like a natural blog post introduction while maintaining technical precision."""
+Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
         }
         # Create prompt templates
         self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in self.prompts.items()}
@@ -1142,6 +1141,59 @@ def validate_author_name(name: str) -> Tuple[bool, str]:
     
     return True, ""
 
+def generate_csv_summary(
+    topic_summaries: List[TopicSynthesis],
+    output_path: str,
+    status_display: Optional[StatusDisplay] = None
+) -> None:
+    """Generate a CSV summary of all topics and papers.
+    
+    Args:
+        topic_summaries: List of topic syntheses
+        output_path: Path to save the CSV file
+        status_display: Optional status display for progress updates
+    """
+    if status_display:
+        status_display.update("Generating CSV summary")
+    
+    # Ensure output directory exists
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Prepare CSV data
+    rows = []
+    
+    # Add header row
+    headers = ["Topic", "Paper Title", "Authors", "Summary", "Weight"]
+    
+    # Add data for each topic and paper
+    for topic in topic_summaries:
+        for paper_summary in topic.paper_summaries:
+            # Format authors as semicolon-separated list
+            authors = "; ".join(a.full_name for a in paper_summary.paper.authors)
+            
+            rows.append([
+                topic.name,
+                paper_summary.paper.title,
+                authors,
+                paper_summary.summary,
+                f"{paper_summary.weight:.2f}"
+            ])
+    
+    # Write to CSV
+    try:
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(rows)
+        
+        if status_display:
+            status_display.success(f"CSV summary saved to {output_path}")
+            
+    except Exception as e:
+        if status_display:
+            status_display.error(f"Failed to save CSV summary: {str(e)}")
+        raise
+
 def run_pdf_summarization(
     config: Optional[dict] = None,
     status_display: Optional[StatusDisplay] = None
@@ -1157,6 +1209,13 @@ def run_pdf_summarization(
         logger.info(f"Source directory: [cyan]{cfg['PDF_FOLDER']}[/cyan]")
         logger.info(f"Target author: [cyan]{cfg['AUTHOR_NAME']}[/cyan]")
         
+        # Clear output directory
+        output_dir = Path(cfg["OUTPUT_DIR"])
+        if output_dir.exists():
+            logger.info(f"Clearing output directory: {output_dir}")
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         # Initialize components
         manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
         llm_processor = LLMProcessor(llm=llm)
@@ -1165,6 +1224,45 @@ def run_pdf_summarization(
             llm_processor=llm_processor
         )
         
+        # Create prompt templates
+        clustering_prompt = ChatPromptTemplate.from_template("""Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
+
+Papers:
+{papers}
+
+Requirements:
+1. Each research area MUST have AT LEAST 3 papers and no more than {max_papers} papers
+2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
+3. Target number of papers per topic is {target_per_topic:.1f}
+4. EVERY paper must be assigned to exactly one research area
+5. Balance the distribution of papers across areas
+
+Research Area Name Guidelines:
+1. Create a specific, technical name that captures the shared innovation
+2. Include both the methodology and its impact/application
+3. Use active verbs and concrete technical terms
+4. Highlight the transformative aspect of the work
+
+Examples of good research area names:
+- "Deep Learning Architectures Transform Visual Understanding"
+- "Novel Validation Methods Enable Reliable AI Systems"
+- "Multi-Modal Foundation Models Advance Decision Support"
+- "Self-Supervised Learning Enhances Representation Quality"
+- "Automated Analysis Systems Improve Data Processing"
+
+Bad examples:
+- "AI Applications" (too vague)
+- "Computer Vision" (not specific to innovation)
+- "Improving Performance" (not technical)
+- "Deep_Learning_Research" (uses underscores)
+- "Novel Methods" (not descriptive)
+
+Return a list of research areas, where each area has:
+1. A specific, technical name
+2. A list of paper indices that belong to that area
+
+IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""")
+
         # Get PDF files
         pdf_files = glob.glob(os.path.join(cfg["PDF_FOLDER"], "*.pdf"))
         if not pdf_files:
@@ -1249,6 +1347,13 @@ def run_pdf_summarization(
         with open(manager.narrative_path, "w") as f:
             f.write(narrative)
         
+        # Generate CSV summary
+        generate_csv_summary(
+            topic_summaries=topic_summaries,
+            output_path=cfg["CSV_OUTPUT"],
+            status_display=status_display
+        )
+        
         logger.info("[bold green]✓ Processing completed successfully![/bold green]")
         return topic_summaries, narrative
         
@@ -1288,6 +1393,23 @@ def extract_text_from_pdf(pdf_file: str) -> str:
     except Exception as e:
         raise ValueError(f"Failed to extract text from PDF: {str(e)}")
 
+def calculate_similarity(text1: str, text2: str, embeddings: Optional[OpenAIEmbeddings] = None) -> float:
+    """Calculate semantic similarity between two texts using embeddings."""
+    if embeddings is None:
+        embeddings = OpenAIEmbeddings()
+    
+    # Get embeddings for both texts
+    emb1 = embeddings.embed_query(text1)
+    emb2 = embeddings.embed_query(text2)
+    
+    # Convert to numpy arrays for efficient computation
+    emb1 = np.array(emb1)
+    emb2 = np.array(emb2)
+    
+    # Calculate cosine similarity
+    similarity = np.dot(emb1, emb2) / (np.linalg.norm(emb1) * np.linalg.norm(emb2))
+    return float(similarity)
+
 def group_papers_by_topic(
     papers: List[Paper],
     llm_processor: LLMProcessor,
@@ -1301,11 +1423,14 @@ def group_papers_by_topic(
     # Calculate target distribution
     total_papers = len(papers)
     target_per_topic = total_papers / num_topics
-    min_papers = max(1, int(target_per_topic * 0.7))
+    min_papers = max(3, int(target_per_topic * 0.7))
     max_papers = int(target_per_topic * 1.3)
     
     if status_display:
         status_display.update(f"Target: {min_papers}-{max_papers} papers per topic")
+    
+    # Initialize embeddings once for reuse
+    embeddings = OpenAIEmbeddings()
     
     # Prepare paper summaries for clustering
     paper_list = []
@@ -1317,50 +1442,57 @@ def group_papers_by_topic(
             "title": paper.title
         })
     
-    # Update clustering prompt to emphasize mutual exclusivity
-    clustering_result = llm_processor.invoke(
-        "CLUSTERING",
-        papers=paper_list,
-        num_topics=num_topics,
-        min_papers=min_papers,
-        max_papers=max_papers,
-        target_per_topic=target_per_topic
+    # Use structured output for clustering
+    structured_llm = llm_processor.llm.with_structured_output(ClusteringOutput)
+    clustering_result = structured_llm.invoke(
+        llm_processor.prompts["CLUSTERING"].format(
+            papers=paper_list,
+            num_topics=num_topics,
+            min_papers=min_papers,
+            max_papers=max_papers,
+            target_per_topic=target_per_topic
+        )
     )
     
-    try:
-        # Remove any backticks and 'json' tag that might be present
-        cleaned_json = clustering_result.replace('```json', '').replace('```', '').strip()
-        clustering_dict = json.loads(cleaned_json)
+    # Build topic groups from structured output
+    topic_groups = defaultdict(list)
+    used_indices = set()
+    
+    # First pass: assign papers based on clustering
+    for area in clustering_result["research_areas"]:
+        area_name = area["name"]
+        for idx in area["paper_indices"]:
+            if idx in used_indices:
+                continue
+            if 0 <= idx < len(papers):
+                topic_groups[area_name].append(papers[idx])
+                used_indices.add(idx)
+    
+    # Second pass: assign any unassigned papers to most relevant topics
+    all_indices = set(range(len(papers)))
+    unassigned = all_indices - used_indices
+    if unassigned and status_display:
+        status_display.update(f"Finding best topics for {len(unassigned)} unassigned papers using semantic similarity")
+    
+    for idx in unassigned:
+        paper = papers[idx]
+        # Find most thematically relevant topic using semantic similarity
+        best_topic = None
+        max_similarity = -1
         
-        # Validate that no paper appears in multiple topics
-        used_indices = set()
-        for topic_indices in clustering_dict.values():
-            # Convert indices to integers
-            topic_indices = [int(idx) for idx in topic_indices]
-            # Check for duplicates
-            if any(idx in used_indices for idx in topic_indices):
-                raise ValueError("Paper assigned to multiple topics")
-            used_indices.update(topic_indices)
-            
-        # Build topic groups
-        topic_groups = defaultdict(list)
-        for topic_name, indices in clustering_dict.items():
-            for idx in indices:
-                if 0 <= int(idx) < len(papers):  # Add bounds check
-                    topic_groups[topic_name].append(papers[int(idx)])
-                    
-    except (json.JSONDecodeError, ValueError) as e:
-        if status_display:
-            status_display.error(f"Failed to parse clustering result: {e}")
-            status_display.error(f"Raw result: {clustering_result}")
-        # Fallback: distribute papers evenly across topics
-        topic_groups = defaultdict(list)
-        papers_per_topic = len(papers) // num_topics
-        for i, paper in enumerate(papers):
-            topic_idx = i // papers_per_topic
-            if topic_idx < num_topics:  # Ensure we don't create too many topics
-                topic_name = f"Research Area {topic_idx + 1}"
-                topic_groups[topic_name].append(paper)
+        for topic_name, topic_papers in topic_groups.items():
+            # Calculate semantic similarity based on paper summaries
+            topic_summary = " ".join(p.summary for p in topic_papers)
+            similarity = calculate_similarity(paper.summary, topic_summary, embeddings)
+            if similarity > max_similarity:
+                max_similarity = similarity
+                best_topic = topic_name
+        
+        if best_topic:
+            topic_groups[best_topic].append(paper)
+            used_indices.add(idx)
+            if status_display:
+                status_display.update(f"Assigned paper to '{best_topic}' (similarity: {max_similarity:.2f})")
     
     if status_display:
         for topic, group in topic_groups.items():
