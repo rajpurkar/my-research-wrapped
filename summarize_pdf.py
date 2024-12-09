@@ -137,120 +137,38 @@ PROMPTS = {
     """,
     
     "PAPER_SUMMARY": """
-    Provide a detailed technical summary of this paper's key contribution:
-    {summary}
-    
-    Include:
-    1. The specific research problem or challenge being addressed
-    2. The key technical innovations and methodological approach
-    3. The main empirical findings and quantitative results
-    4. The broader implications or applications of the work
-    
-    Focus on concrete details - use numbers, metrics, and specific technical terms.
-    Keep to 3-4 sentences that highlight the core technical contribution.
-    """,
-    
-    "BRIEF_SUMMARY": """
-    Provide a 1-2 sentence technical summary of this paper's key contribution:
+    Provide a technical summary of this paper's key innovation and results:
     {text}
     
-    Focus on the specific technical innovation and results.
-    """,
+    Focus on:
+    1. The specific research problem addressed
+    2. The key technical innovation and methodological approach
+       - If the paper introduces a named method/model/framework, highlight this name
+       - Example: "We introduced MedBERT, a new language model for..."
+    3. Main empirical findings and quantitative results
     
-    "TOPIC_NARRATIVE": """
-    Create a flowing technical narrative that connects these papers within the same research area.
-    
-    Papers:
-    {context}
-    
-    Guidelines:
-    1. Start with the foundational work or key methodology
-    2. Show how each paper builds upon or complements the others
-    3. Use explicit transitions between papers
-    4. Highlight technical relationships and methodological connections
-    5. Keep the discussion focused and technical
-    
-    The narrative should be concise (3-4 paragraphs) but show clear connections between the papers.
+    Keep to 2-3 sentences that highlight the core technical contribution.
+    Use "We" to describe our work, as this is authored by the researcher of interest.
     """,
     
     "CLUSTERING": """
     You will be provided with a list of research paper summaries along with their weights.
     Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
     
-    Distribution requirements:
-    - Each topic should have between {min_papers} and {max_papers} papers
-    - Target number of papers per topic is {target_per_topic:.1f}
-    - Ensure at least one major paper (weight 1.0) per topic if possible
-    
-    Guidelines for topic names:
-    1. Make a clear, declarative statement about the research contribution
-    2. Focus on specific technical innovations and their impact
-    3. Use natural language (no underscores)
-    4. Emphasize the novel methodology and its demonstrated benefits
-    
-    Bad topic names:
-    - Too vague (just stating a field)
-    - Not making a specific claim
-    - Not mentioning technical approach
-    - Using technical notation or jargon
-    
-    Each topic should:
-    - Make a specific claim about technical innovation
-    - Focus on shared methodological advances
-    
-    Return ONLY a JSON object with topic names as keys and paper indices as values.
-    """,
-    
-    "TECHNICAL_OVERVIEW": """
-    Create a technical overview (2-3 paragraphs) that:
-    1. Identifies the major research themes across these areas: {themes}
-    2. Highlights specific technical innovations and methodological advances
-    3. Shows how different technical approaches complement each other
-    4. Emphasizes concrete outcomes and impact
-    
-    Style guidelines:
-    - Use active voice and technical language
-    - Focus on methodological connections
-    - Highlight specific technical challenges solved
-    - Maintain academic tone while being engaging
-    - Include quantitative results where relevant
-    """,
-    
-    "TOPIC_CONTEXT": """
-    Write a single technical sentence that:
-    1. Places this research claim in context: {theme}
-    2. Connects it to broader technical challenges
-    3. Highlights its methodological significance
-    
-    Be specific about technical aspects and avoid generic statements.
-    """,
-    
-    "FUTURE_DIRECTIONS": """
-    Write a technical conclusion (2-3 sentences) that:
-    1. Identifies specific methodological challenges remaining in: {themes}
-    2. Suggests concrete technical approaches for future work
-    3. Highlights opportunities for combining methods across themes
-    
-    Focus on technical aspects and methodological innovations.
-    """,
-    
-    "TOPIC_CLUSTERING": """
-    You will be provided with a list of research paper summaries along with their weights.
-    Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
-    
     Papers:
     {papers}
     
-    Distribution requirements:
-    - Each topic should have between {min_papers} and {max_papers} papers
-    - Target number of papers per topic is {target_per_topic:.1f}
-    - Ensure at least one major paper (weight 1.0) per topic if possible
+    Requirements:
+    1. Each paper MUST be assigned to EXACTLY ONE topic - no paper can appear in multiple topics
+    2. Each topic should have between {min_papers} and {max_papers} papers
+    3. Target number of papers per topic is {target_per_topic:.1f}
+    4. Ensure at least one major paper (weight 1.0) per topic if possible
     
     Guidelines for topic names:
-    1. Make a clear, declarative statement about the research contribution
-    2. Focus on specific technical innovations and their impact
+    1. Make a clear, declarative statement about our research contribution
+    2. Focus on our specific technical innovations and their impact
     3. Use natural language (no underscores)
-    4. Emphasize the novel methodology and its demonstrated benefits
+    4. Emphasize our novel methodology and its demonstrated benefits
     
     Bad topic names:
     - Too vague (just stating a field)
@@ -259,77 +177,56 @@ PROMPTS = {
     - Using technical notation or jargon
     
     Each topic should:
-    - Make a specific claim about technical innovation
-    - Focus on shared methodological advances
+    - Make a specific claim about our technical innovation
+    - Focus on our shared methodological advances
+    - Be distinct from other topics to avoid overlap
     
     Return ONLY a JSON object with topic names as keys and paper indices as values.
+    Each paper index should appear exactly once across all topics.
+    Use "We" to describe our work, as these are all papers by the researcher of interest.
     """,
     
-    "TECHNICAL_SUMMARY": """
-    Provide a detailed technical summary of this paper's key contribution:
-    {text}
+    "TOPIC_SYNTHESIS": """
+    Synthesize our papers' contributions within this research topic.
     
-    Include:
-    1. The specific research problem or challenge being addressed
-    2. The key technical innovations and methodological approach
-    3. The main empirical findings and quantitative results
-    4. The broader implications or applications of the work
-    
-    Focus on concrete details - use numbers, metrics, and specific technical terms.
-    Keep to 3-4 sentences that highlight the core technical contribution.
-    """,
-    
-    "PAPER_ANALYSIS": """
-    Analyze this research paper and extract the following information:
-    
-    Text: {text}
-    
-    Return a JSON object with these fields:
-    1. "title": The paper's full title
-    2. "authors": List of author names (first and last names)
-    3. "summary": A technical summary of the key contributions (3-4 sentences)
-    4. "weight": A score from 0.1 to 1.0 indicating the paper's technical depth and significance
-    5. "role": One of ["primary_research", "survey", "case_study", "technical_report"]
-    
-    Focus on extracting accurate technical details and maintain the original formatting of names.
-    """,
-    
-    "PAPER_INITIAL_ANALYSIS": """
-    Analyze this research paper and extract the following information:
-    
-    Text: {text}
-    
-    Return a JSON object with these fields:
-    1. "title": The paper's full title
-    2. "authors": List of complete author names (first and last names)
-    3. "technical_summary": A detailed technical summary of the key contributions (3-4 sentences)
-    4. "brief_summary": A 1-2 sentence technical summary focusing on the core innovation
-    5. "weight": A score from 0.1 to 1.0 indicating the paper's technical depth and significance
+    Papers:
+    {context}
     
     Guidelines:
-    - For authors: Include both first and last names, remove titles (Dr., Prof., etc.)
-    - For summaries: Focus on concrete technical details, methods, and results
-    - For weight: Consider novelty, technical depth, and empirical validation
+    1. Start with a clear topic statement that frames our research direction
+    2. Describe papers chronologically, referencing them by:
+       - Method/model name if introduced (e.g., "MedBERT achieved...")
+       - First author (e.g., "Chen et al. demonstrated...")
+       - Never use phrases like "In our first paper" or "Our next work"
+    3. Highlight specific metrics, numbers, and results that demonstrate impact
+    4. Connect papers to show progression of ideas and methods
+    5. Use "We" to describe our work, as these are all papers by the researcher of interest
     
-    Return ONLY the JSON object, nothing else.
+    Write 2-3 paragraphs in a narrative style that:
+    - Opens with a high-level framing of the research area
+    - Shows how papers build on each other
+    - Emphasizes quantitative impact and real-world significance
+    - Uses concise paper references
+    
+    Example style:
+    "MedBERT established new benchmarks for medical language understanding, achieving 92% accuracy on clinical tasks. Building on this foundation, Chen et al. demonstrated a 45% improvement in diagnostic accuracy through their novel attention mechanism. The RadNet system we developed further extended these capabilities..."
     """,
     
-    "NORMALIZE_AUTHORS": """
-    Normalize these author names by following these rules EXACTLY:
-    1. Keep ONLY first and last name, remove ALL middle names/initials
-    2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
-    3. Convert ALL special characters to their basic form:
-       - á,à,ä,â -> a
-       - é,è,ë,ê -> e
-       - í,ì,ï,î -> i
-       - ó,ò,ö,ô -> o
-       - ú,ù,ü,û -> u
-       - ñ -> n
-    4. MAINTAIN the EXACT capitalization from the original names
-    5. Remove ALL extra spaces
+    "OVERALL_NARRATIVE": """
+    Create an introductory narrative that frames our research across these topics: {themes}
     
-    Original names: {names}
-    Return a JSON array of normalized names, maintaining original case.
+    Write 2-3 paragraphs that:
+    1. Open with a high-level statement about our mission and goals
+    2. Frame the key challenges we're addressing in medical AI
+    3. Introduce the major themes ({themes}) that our work spans
+    
+    Example style:
+    "I'm excited to share highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Our recent progress brings us closer to that goal.
+    
+    Our focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our perspective with Topol et al., GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
+    
+    Use "We" to describe our work, as these are all papers by the researcher of interest.
+    Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
     """,
 }
 
@@ -338,14 +235,24 @@ class FileManager:
     """Base class for file operations with common utilities."""
     
     def __init__(self, base_dir: Path):
-        self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(exist_ok=True)
+        """Initialize with base directory path.
         
+        Args:
+            base_dir: Path to the base directory for all outputs
+        """
+        # Convert to absolute path and resolve any symlinks
+        self.base_dir = Path(base_dir).resolve()
+        # Create base directory if it doesn't exist
+        self.base_dir.mkdir(exist_ok=True)
+    
     def get_path(self, filename: str | Path) -> Path:
         """Get full path for a file."""
-        if isinstance(filename, Path) and filename.is_absolute():
-            return filename
-        return self.base_dir / str(filename)
+        path = Path(filename)
+        # If path is absolute, return it directly
+        if path.is_absolute():
+            return path
+        # Otherwise join with base_dir
+        return self.base_dir / path
         
     def save_json(self, filename: str | Path, data: dict):
         """Save data as JSON."""
@@ -425,19 +332,20 @@ class CacheManager:
             console.print(f"[yellow]Failed to save cache for {Path(pdf_path).name}: {e}[/yellow]")
 
 class ResearchSummaryManager(FileManager):
-    """Manages the processing and storage of research summaries."""
+    """Manages all research summary data and operations."""
     
-    def __init__(self, output_dir: str):
-        self.output_dir = Path(output_dir)
-        self.papers_dir = self.output_dir / "papers"
-        self.topics_dir = self.output_dir / "topics"
-        self.narrative_path = self.output_dir / "year_in_review_narrative.txt"
+    def __init__(self, output_dir: str = DEFAULT_CONFIG["OUTPUT_DIR"]):
+        """Initialize with output directory structure."""
+        super().__init__(Path(output_dir))  # Initialize FileManager first
         
-        # Create directories if they don't exist
-        self.papers_dir.mkdir(parents=True, exist_ok=True)
-        self.topics_dir.mkdir(parents=True, exist_ok=True)
+        # Use self.base_dir from FileManager instead of creating new Path
+        self.papers_dir = self.base_dir / "papers"
+        self.topics_dir = self.base_dir / "topics"
+        self.narrative_path = self.base_dir / "year_in_review_narrative.txt"
         
-        super().__init__(self.output_dir)
+        # Create directories
+        for directory in [self.papers_dir, self.topics_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
         
     def get_paper_path(self, paper_title: str) -> Path:
         """Get path for paper data and summary."""
@@ -697,10 +605,9 @@ class Paper:
 
 @dataclass
 class PaperSummary:
-    """Represents a paper's generated summaries."""
+    """Represents a paper's summary."""
     paper: Paper
-    brief_summary: str
-    technical_summary: str
+    summary: str
     weight: float
     
     def to_dict(self) -> dict:
@@ -708,8 +615,7 @@ class PaperSummary:
         return {
             "file_path": self.paper.file_path,
             "title": self.paper.title,
-            "brief_summary": self.brief_summary,
-            "technical_summary": self.technical_summary,
+            "summary": self.summary,
             "weight": self.weight,
             "authors": [
                 {
@@ -722,18 +628,31 @@ class PaperSummary:
 
 @dataclass
 class TopicSummary:
-    """Represents a group of related papers with generated summaries."""
+    """Represents a group of related papers with their narrative."""
     name: str
     paper_summaries: List[PaperSummary]
-    flowing_narrative: str
-    context_summary: Optional[str] = None
+    narrative: str
     
     def to_dict(self) -> dict:
         """Convert to serializable format."""
         return {
             "name": self.name,
-            "flowing_narrative": self.flowing_narrative,
-            "context_summary": self.context_summary,
+            "narrative": self.narrative,
+            "paper_summaries": [ps.to_dict() for ps in self.paper_summaries]
+        }
+
+@dataclass
+class TopicSynthesis:
+    """Represents a synthesis of papers within a research topic."""
+    name: str
+    paper_summaries: List[PaperSummary]
+    synthesis: str
+    
+    def to_dict(self) -> dict:
+        """Convert to serializable format."""
+        return {
+            "name": self.name,
+            "synthesis": self.synthesis,
             "paper_summaries": [ps.to_dict() for ps in self.paper_summaries]
         }
 
@@ -845,14 +764,13 @@ def process_pdf(
         
         # analysis_data is now a dict, so use dict access
         if analysis_data["authors"]:
-            normalized_names = llm_processor.invoke_with_retry(
-                "NORMALIZE_AUTHORS",
-                names=json.dumps(analysis_data["authors"])
-            )
-            try:
-                normalized_names = json.loads(normalized_names)
-            except json.JSONDecodeError:
-                normalized_names = analysis_data["authors"]  # Fallback to original names
+            normalized_names = [
+                llm_processor.invoke_with_retry(
+                    "NAME_NORMALIZATION",
+                    name=author_name
+                )
+                for author_name in analysis_data["authors"]
+            ]
         else:
             normalized_names = []
         
@@ -931,37 +849,30 @@ def generate_paper_summary(
     llm_processor: LLMProcessor,
     status_display: Optional[StatusDisplay] = None
 ) -> PaperSummary:
-    """Generate detailed summaries for a paper."""
+    """Generate summary for a paper."""
     if status_display:
-        status_display.update(f"Generating summaries for {paper.title}")
+        status_display.update(f"Generating summary for {paper.title}")
     
-    # Generate brief and technical summaries without truncation
-    brief_summary = llm_processor.invoke_with_retry(
-        "BRIEF_SUMMARY",
-        text=paper.original_text
-    )
-    
-    technical_summary = llm_processor.invoke_with_retry(
-        "TECHNICAL_SUMMARY",
+    summary = llm_processor.invoke_with_retry(
+        "PAPER_SUMMARY",
         text=paper.original_text
     )
     
     return PaperSummary(
         paper=paper,
-        brief_summary=brief_summary,
-        technical_summary=technical_summary,
+        summary=summary,
         weight=paper.weight
     )
 
-def create_topic_summary(
+def create_topic_synthesis(
     name: str,
     paper_summaries: List[PaperSummary],
     llm_processor: LLMProcessor,
     status_display: Optional[StatusDisplay] = None
-) -> TopicSummary:
-    """Create a topic summary from a list of paper summaries."""
+) -> TopicSynthesis:
+    """Create a synthesis of papers within a research topic."""
     if status_display:
-        status_display.update(f"Creating topic summary for {name}")
+        status_display.update(f"Creating synthesis for topic: {name}")
     
     # Sort papers by weight
     sorted_summaries = sorted(
@@ -970,152 +881,57 @@ def create_topic_summary(
         reverse=True
     )
     
-    # Generate flowing narrative
+    # Generate synthesis for this topic
     summaries_context = [
         {
             "title": ps.paper.title,
-            "brief_summary": ps.brief_summary,
-            "technical_summary": ps.technical_summary,
+            "summary": ps.summary,
             "weight": ps.weight
         }
         for ps in sorted_summaries
     ]
     
-    flowing_narrative = llm_processor.invoke_with_retry(
-        "TOPIC_NARRATIVE",
+    synthesis = llm_processor.invoke_with_retry(
+        "TOPIC_SYNTHESIS",
         context=summaries_context
     )
     
-    # Generate context summary if needed
-    context_summary = None
-    if len(paper_summaries) > 1:
-        context_summary = llm_processor.invoke_with_retry(
-            "TOPIC_CONTEXT",
-            theme=name
-        )
-    
-    return TopicSummary(
+    return TopicSynthesis(
         name=name,
         paper_summaries=sorted_summaries,
-        flowing_narrative=flowing_narrative,
-        context_summary=context_summary
+        synthesis=synthesis
     )
 
-def extract_text_from_pdf(pdf_file: str) -> str:
-    """Extract text from a PDF file."""
-    try:
-        loader = PyPDFLoader(pdf_file)
-        pages = loader.load()
-        text = "\n".join(page.page_content for page in pages)
-        return text
-    except Exception as e:
-        raise ValueError(f"Failed to extract text from PDF: {str(e)}")
-
-def group_papers_by_topic(
-    papers: List[Paper],
-    llm_processor: LLMProcessor,
-    num_topics: int = 5,
-    status_display: Optional[StatusDisplay] = None
-) -> Dict[str, List[Paper]]:
-    """Group papers into topics using LLM-based clustering."""
-    if status_display:
-        status_display.update("Grouping papers into topics")
-    
-    # Calculate target distribution
-    total_papers = len(papers)
-    target_per_topic = total_papers / num_topics
-    min_papers = max(1, int(target_per_topic * 0.7))
-    max_papers = int(target_per_topic * 1.3)
-    
-    if status_display:
-        status_display.update(f"Target: {min_papers}-{max_papers} papers per topic")
-    
-    # Prepare paper summaries for clustering
-    paper_list = []
-    for idx, paper in enumerate(papers):
-        paper_list.append({
-            "index": idx,
-            "weight": paper.weight,
-            "summary": paper.summary,
-            "title": paper.title
-        })
-    
-    # Get clustering from LLM and parse JSON response
-    clustering_result = llm_processor.invoke_with_retry(
-        "TOPIC_CLUSTERING",
-        papers=paper_list,
-        num_topics=num_topics,
-        min_papers=min_papers,
-        max_papers=max_papers,
-        target_per_topic=target_per_topic
-    )
-    
-    # Parse the JSON string into a dictionary, handling potential backticks
-    try:
-        # Remove any backticks and 'json' tag that might be present
-        cleaned_json = clustering_result.replace('```json', '').replace('```', '').strip()
-        clustering_dict = json.loads(cleaned_json)
-    except json.JSONDecodeError as e:
-        if status_display:
-            status_display.error(f"Failed to parse clustering result: {e}")
-            status_display.error(f"Raw result: {clustering_result}")
-        # Fallback: put all papers in one topic
-        clustering_dict = {"Default Topic": list(range(len(papers)))}
-    
-    # Build topic groups
-    topic_groups = defaultdict(list)
-    for topic_name, indices in clustering_dict.items():
-        for idx in indices:
-            if 0 <= int(idx) < len(papers):  # Add bounds check
-                topic_groups[topic_name].append(papers[int(idx)])
-    
-    if status_display:
-        for topic, group in topic_groups.items():
-            status_display.update(f"Topic '{topic}': {len(group)} papers")
-    
-    return dict(topic_groups)
-
-def generate_narrative(
-    topic_summaries: List[TopicSummary],
+def generate_overall_narrative(
+    topic_syntheses: List[TopicSynthesis],
     llm_processor: LLMProcessor,
     status_display: Optional[StatusDisplay] = None
 ) -> str:
-    """Generate a cohesive narrative connecting research themes."""
+    """Generate the overall narrative of research accomplishments."""
     if status_display:
-        status_display.update("Generating final research narrative")
+        status_display.update("Generating overall narrative")
     
     # Get topic names
-    theme_titles = [topic.name for topic in topic_summaries]
+    theme_titles = [topic.name for topic in topic_syntheses]
     
-    # Generate technical overview
-    if status_display:
-        status_display.update("Creating technical overview")
-    overview = llm_processor.invoke_with_retry(
-        "TECHNICAL_OVERVIEW",
+    # Generate introductory narrative
+    intro_narrative = llm_processor.invoke_with_retry(
+        "OVERALL_NARRATIVE",
         themes=theme_titles
     )
-    narrative = f"{overview}\n\n"
     
-    # Add detailed topic discussions
-    if status_display:
-        status_display.update("Adding detailed topic discussions")
+    # Build complete narrative with topic syntheses
+    complete_narrative = [intro_narrative]
     
-    for topic in topic_summaries:
-        narrative += f"### {topic.name}\n\n"
-        if topic.context_summary:
-            narrative += f"{topic.context_summary}\n\n"
-        narrative += f"{topic.flowing_narrative}\n\n"
+    # Add each topic synthesis
+    for topic in topic_syntheses:
+        # Add topic header
+        complete_narrative.append(f"\n\n## {topic.name}")
+        # Add topic synthesis
+        complete_narrative.append(topic.synthesis)
     
-    # Add future directions
-    if status_display:
-        status_display.update("Adding future directions")
-    conclusion = llm_processor.invoke_with_retry(
-        "FUTURE_DIRECTIONS",
-        themes=theme_titles
-    )
-    narrative += f"\n{conclusion}"
-    
-    return narrative
+    # Join all parts with proper spacing
+    return "\n".join(complete_narrative)
 
 def validate_author_name(name: str) -> Tuple[bool, str]:
     """Validate author name and return validation status with message."""
@@ -1183,8 +999,7 @@ def run_pdf_summarization(
     for paper in papers:
         paper_summaries.append(PaperSummary(
             paper=paper,
-            brief_summary=paper.brief_summary,
-            technical_summary=paper.summary,
+            summary=paper.summary,
             weight=paper.weight
         ))
     
@@ -1199,7 +1014,7 @@ def run_pdf_summarization(
     # Create and save topic summaries
     topic_summaries = []
     for topic_name, topic_papers in topic_groups.items():
-        topic_summary = create_topic_summary(
+        topic_summary = create_topic_synthesis(
             name=topic_name,
             paper_summaries=[
                 ps for ps in paper_summaries
@@ -1215,8 +1030,8 @@ def run_pdf_summarization(
         manager.save_json(topic_path, topic_summary.to_dict())
     
     # Generate narrative
-    narrative = generate_narrative(
-        topic_summaries=topic_summaries,
+    narrative = generate_overall_narrative(
+        topic_syntheses=topic_summaries,
         llm_processor=llm_processor,
         status_display=status_display
     )
@@ -1263,6 +1078,96 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 logger = setup_logging()
+
+def extract_text_from_pdf(pdf_file: str) -> str:
+    """Extract text from a PDF file."""
+    try:
+        loader = PyPDFLoader(pdf_file)
+        pages = loader.load()
+        text = "\n".join(page.page_content for page in pages)
+        return text
+    except Exception as e:
+        raise ValueError(f"Failed to extract text from PDF: {str(e)}")
+
+def group_papers_by_topic(
+    papers: List[Paper],
+    llm_processor: LLMProcessor,
+    num_topics: int = 5,
+    status_display: Optional[StatusDisplay] = None
+) -> Dict[str, List[Paper]]:
+    """Group papers into topics using LLM-based clustering."""
+    if status_display:
+        status_display.update("Grouping papers into topics")
+    
+    # Calculate target distribution
+    total_papers = len(papers)
+    target_per_topic = total_papers / num_topics
+    min_papers = max(1, int(target_per_topic * 0.7))
+    max_papers = int(target_per_topic * 1.3)
+    
+    if status_display:
+        status_display.update(f"Target: {min_papers}-{max_papers} papers per topic")
+    
+    # Prepare paper summaries for clustering
+    paper_list = []
+    for idx, paper in enumerate(papers):
+        paper_list.append({
+            "index": idx,
+            "weight": paper.weight,
+            "summary": paper.summary,
+            "title": paper.title
+        })
+    
+    # Update clustering prompt to emphasize mutual exclusivity
+    clustering_result = llm_processor.invoke_with_retry(
+        "CLUSTERING",
+        papers=paper_list,
+        num_topics=num_topics,
+        min_papers=min_papers,
+        max_papers=max_papers,
+        target_per_topic=target_per_topic
+    )
+    
+    try:
+        # Remove any backticks and 'json' tag that might be present
+        cleaned_json = clustering_result.replace('```json', '').replace('```', '').strip()
+        clustering_dict = json.loads(cleaned_json)
+        
+        # Validate that no paper appears in multiple topics
+        used_indices = set()
+        for topic_indices in clustering_dict.values():
+            # Convert indices to integers
+            topic_indices = [int(idx) for idx in topic_indices]
+            # Check for duplicates
+            if any(idx in used_indices for idx in topic_indices):
+                raise ValueError("Paper assigned to multiple topics")
+            used_indices.update(topic_indices)
+            
+        # Build topic groups
+        topic_groups = defaultdict(list)
+        for topic_name, indices in clustering_dict.items():
+            for idx in indices:
+                if 0 <= int(idx) < len(papers):  # Add bounds check
+                    topic_groups[topic_name].append(papers[int(idx)])
+                    
+    except (json.JSONDecodeError, ValueError) as e:
+        if status_display:
+            status_display.error(f"Failed to parse clustering result: {e}")
+            status_display.error(f"Raw result: {clustering_result}")
+        # Fallback: distribute papers evenly across topics
+        topic_groups = defaultdict(list)
+        papers_per_topic = len(papers) // num_topics
+        for i, paper in enumerate(papers):
+            topic_idx = i // papers_per_topic
+            if topic_idx < num_topics:  # Ensure we don't create too many topics
+                topic_name = f"Research Area {topic_idx + 1}"
+                topic_groups[topic_name].append(paper)
+    
+    if status_display:
+        for topic, group in topic_groups.items():
+            status_display.update(f"Topic '{topic}': {len(group)} papers")
+    
+    return dict(topic_groups)
 
 if __name__ == "__main__":
     try:
