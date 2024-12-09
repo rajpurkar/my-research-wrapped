@@ -131,7 +131,7 @@ if not api_key:
 llm = ChatOpenAI(
     api_key=api_key,  # Pass key explicitly
     model="gpt-4o-mini",
-    temperature=0.1
+    temperature=0.05
 )
 
 # Initialize LLM for author handling
@@ -142,67 +142,34 @@ name_llm = ChatOpenAI(
 
 # At the top of the file, add these new constants for prompts
 PROMPTS = {
-    "NAME_NORMALIZATION": """
-    Normalize this author name by following these rules EXACTLY:
-    1. Keep ONLY first and last name, remove ALL middle names/initials
-    2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
-    3. Convert ALL special characters to their basic form:
-       - á,à,ä,â -> a
-       - é,è,ë,ê -> e
-       - í,ì,ï,î -> i
-       - ó,ò,ö,ô -> o
-       - ú,ù,ü,û -> u
-       - ñ -> n
-    4. MAINTAIN the EXACT capitalization from the original name
-    5. Remove ALL extra spaces
-    
-    Original name: {name}
-    Return ONLY the normalized name in the ORIGINAL case.
-    """,
-    
-    "AUTHOR_EXTRACTION": """
-    Extract the author names from this text. The names should be in their original casing.
-    
-    Requirements:
-    1. Each name MUST have both first and last name components
-    2. Keep original capitalization of names
-    3. Remove all titles (Dr., Prof., PhD, etc.)
-    4. Remove all affiliations and numbers
-    5. Keep middle names/initials if present
-    6. Preserve hyphenated names and special characters (é, ñ, etc.)
-    
-    Text: {text}
-    Return ONLY the list of complete author names, one per line.
-    """,
-    
-    "TITLE_EXTRACTION": """
-    Extract the title of this research paper. The title might be:
-    - At the beginning of the text
-    - After keywords like "Title:" or "Paper:"
-    - In a header or metadata section
-    - In larger or bold font (though you can't see formatting)
-    
-    Text: {text}
-    
-    Return ONLY the title text, nothing else.
-    If no clear title is found, return "Untitled".
-    """,
-    
-    "PAPER_SUMMARY": """
-    Provide a technical summary of this paper's key innovation and results:
-    {text}
-    
-    Focus on:
-    1. The specific research problem addressed
-    2. The key technical innovation and methodological approach
-       - If the paper introduces a named method/model/framework, highlight this name
-       - Example: "We introduced MedBERT, a new language model for..."
-    3. Main empirical findings and quantitative results
-    
-    Write EXACTLY {target_sentences} clear, concise sentences that highlight the core technical contribution.
-    Use "We" to describe our work, as this is authored by the researcher of interest.
-    """,
-    
+    "PAPER_ANALYSIS": """Analyze this academic paper and extract the following information in a structured format:
+1. Title: Extract the paper title
+2. Authors: List all authors with both first and last names
+3. Summary: Provide a focused technical summary that:
+   - Identifies the specific research problem addressed
+   - Describes the key technical innovation and methodological approach
+   - Highlights main empirical findings and quantitative results
+   - Uses 2-3 clear, concise sentences
+4. Impact Weight: Score from 0-1 based on paper significance
+
+Text: {text}""",
+            "NAME_NORMALIZATION": """Normalize these author names by following these rules EXACTLY:
+1. Keep ONLY first and last name, remove ALL middle names/initials
+2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
+3. Convert ALL special characters to their basic form:
+   - á,à,ä,â -> a
+   - é,è,ë,ê -> e
+   - í,ì,ï,î -> i
+   - ó,ò,ö,ô -> o
+   - ú,ù,ü,û -> u
+   - ñ -> n
+4. MAINTAIN the EXACT capitalization from the original names
+5. Remove ALL extra spaces
+
+Original names:
+{name}
+
+Return ONLY the normalized names, one per line.""",
     "CLUSTERING": """Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
 
 Papers:
@@ -270,26 +237,25 @@ Example style:
 
 Keep the tone confident but grounded, focusing on concrete technical achievements.""",
     
-    "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
+    "OVERALL_NARRATIVE": """Create a high-level narrative that synthesizes our research contributions across these areas: {themes}
 
 Write EXACTLY {target_sentences} sentences that:
-1. Open with our SPECIFIC technical contributions and innovations
-2. Focus on CONCRETE methodological advances and quantitative results
-3. Show how different technical approaches complement each other
-4. Maintain technical precision while being accessible
+1. Open with our broad technical vision and research direction
+2. Highlight the transformative methodological advances we've developed
+3. Show how our different approaches form a cohesive research program
+4. Emphasize the collective impact of our innovations
 
 Key Requirements:
-- Start with "Our research advances..." or similar active framing
-- Name specific technical innovations or methodologies in first paragraph
-- Include at least one quantitative result or metric
-- Focus on methodological contributions rather than general impact
+- Start with a broad statement about our research direction
+- Focus on overarching methodological themes rather than specific results
 - Use first-person plural ("we", "our") naturally
-- Balance technical detail with clarity
+- Connect technical advances to larger research goals
+- Maintain technical precision while emphasizing the big picture
 
 Example Style:
-"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
+"Our research advances the foundations of reliable machine learning through complementary innovations in model architecture, uncertainty quantification, and validation frameworks. We've developed novel approaches that systematically address core challenges in building trustworthy AI systems, establishing new methodological standards for the field. Our integrated research program combines theoretical advances with practical implementations, creating a comprehensive framework for next-generation AI development..."
 
-Keep the narrative focused on specific technical achievements while maintaining accessibility.""",
+Keep the narrative focused on the overarching technical vision while connecting different research threads.""",
 }
 
 # Base Classes
@@ -353,124 +319,8 @@ class LLMProcessor:
     
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
-        # Keep prompts as raw strings
-        self.prompts = {
-            "COMBINED_PAPER_ANALYSIS": """Analyze this academic paper and extract the following information in a structured format:
-1. Title: Extract the paper title
-2. Authors: List all authors with both first and last names
-3. Summary: Provide a focused technical summary that:
-   - Identifies the specific research problem addressed
-   - Describes the key technical innovation and methodological approach
-   - Highlights main empirical findings and quantitative results
-   - Uses 2-3 clear, concise sentences
-4. Impact Weight: Score from 0-1 based on paper significance
-
-Text: {text}""",
-            "NAME_NORMALIZATION": """Normalize these author names by following these rules EXACTLY:
-1. Keep ONLY first and last name, remove ALL middle names/initials
-2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
-3. Convert ALL special characters to their basic form:
-   - á,à,ä,â -> a
-   - é,è,ë,ê -> e
-   - í,ì,ï,î -> i
-   - ó,ò,ö,ô -> o
-   - ú,ù,ü,û -> u
-   - ñ -> n
-4. MAINTAIN the EXACT capitalization from the original names
-5. Remove ALL extra spaces
-
-Original names:
-{name}
-
-Return ONLY the normalized names, one per line.""",
-            "CLUSTERING": """Group these papers into {num_topics} cohesive research areas that highlight key technical innovations and methodological advances.
-
-Papers:
-{papers}
-
-Requirements:
-1. Each research area MUST have AT LEAST 3 papers and no more than {max_papers} papers
-2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
-3. Target number of papers per topic is {target_per_topic:.1f}
-4. EVERY paper must be assigned to exactly one research area
-5. Balance the distribution of papers across areas
-
-Research Area Name Guidelines:
-1. Create a specific, technical name that captures the shared innovation
-2. Include both the methodology and its impact/application
-3. Use active verbs and concrete technical terms
-4. Highlight the transformative aspect of the work
-
-Examples of good research area names:
-- "Deep Learning Architectures Transform Visual Understanding"
-- "Novel Validation Methods Enable Reliable AI Systems"
-- "Multi-Modal Foundation Models Advance Decision Support"
-- "Self-Supervised Learning Enhances Representation Quality"
-- "Automated Analysis Systems Improve Data Processing"
-
-Bad examples:
-- "AI Applications" (too vague)
-- "Computer Vision" (not specific to innovation)
-- "Improving Performance" (not technical)
-- "Deep_Learning_Research" (uses underscores)
-- "Novel Methods" (not descriptive)
-
-Return a list of research areas, where each area has:
-1. A specific, technical name
-2. A list of paper indices that belong to that area
-
-IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
-            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area: {name}
-
-Papers:
-{context}
-
-Guidelines for synthesis:
-1. Present our work's role in advancing this technical area
-2. Reference papers concisely by:
-   - Method names when notable (e.g., "The model achieved...")
-   - Brief descriptions (e.g., "Our approach to uncertainty quantification...")
-   - Never use full paper titles
-   - Never use chronological markers
-3. Highlight key technical innovations and results
-4. Show how different approaches complement each other
-5. Use "we" and "our" naturally without being overly promotional
-6. Write in a technical yet accessible style
-
-Write EXACTLY {target_sentences} sentences that:
-- Open with the area's technical significance
-- Detail key methodological advances
-- Present quantitative results and impact
-- Show connections between different approaches
-- Balance confidence with objectivity
-
-Example style:
-"We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
-
-Keep the tone confident but grounded, focusing on concrete technical achievements.""",
-            "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
-
-Write EXACTLY {target_sentences} sentences that:
-1. Open with our SPECIFIC technical contributions and innovations
-2. Focus on CONCRETE methodological advances and quantitative results
-3. Show how different technical approaches complement each other
-4. Maintain technical precision while being accessible
-
-Key Requirements:
-- Start with "Our research advances..." or similar active framing
-- Name specific technical innovations or methodologies in first paragraph
-- Include at least one quantitative result or metric
-- Focus on methodological contributions rather than general impact
-- Use first-person plural ("we", "our") naturally
-- Balance technical detail with clarity
-
-Example Style:
-"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
-
-Keep the narrative focused on specific technical achievements while maintaining accessibility.""",
-        }
-        # Create prompt templates
-        self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in self.prompts.items()}
+        # Use the global PROMPTS dictionary instead of redefining prompts
+        self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in PROMPTS.items()}
     
     def invoke(self, prompt_key: str, **kwargs) -> str:
         """Invoke LLM with error handling."""
@@ -480,7 +330,7 @@ Keep the narrative focused on specific technical achievements while maintaining 
             
         try:
             prompt = self.prompts[prompt_key]
-            if prompt_key == "COMBINED_PAPER_ANALYSIS":
+            if prompt_key == "PAPER_ANALYSIS":
                 # Use structured output for paper analysis
                 structured_llm = self.llm.with_structured_output(PaperAnalysis)
                 result = structured_llm.invoke(prompt.format(**kwargs))
@@ -808,7 +658,7 @@ def process_pdf(
 
         # Single LLM call for combined analysis with full text
         analysis_data = llm_processor.invoke(
-            "COMBINED_PAPER_ANALYSIS",
+            "PAPER_ANALYSIS",
             text=text
         )
         # analysis_data is already a PaperAnalysis dict, no need to parse JSON

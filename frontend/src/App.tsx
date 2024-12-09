@@ -130,7 +130,7 @@ function App() {
             {generateSparkles()}
           </div>
           <div className="hero-content">
-            <h1>Research Year in Review</h1>
+            <h1>My Research Wrapped 2024</h1>
             <h2 className="author-name">by {narrative.author}</h2>
             
             {/* Topics Grid */}
