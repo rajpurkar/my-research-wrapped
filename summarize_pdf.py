@@ -6,7 +6,7 @@ import json
 import hashlib
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, List, Dict, Tuple, Optional
+from typing import TYPE_CHECKING, List, Dict, Tuple, Optional, TypedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from collections import Counter, defaultdict
@@ -27,6 +27,12 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+
+class PaperAnalysis(TypedDict):
+    title: str
+    authors: List[str]
+    summary: str
+    weight: float
 
 # Configure logging
 def setup_logging():
@@ -185,49 +191,65 @@ PROMPTS = {
     Each paper index should appear exactly once across all topics.
     Use "We" to describe our work, as these are all papers by the researcher of interest.
     """,
+    "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
+
+Papers:
+{context}
+
+Guidelines:
+1. Start with a clear topic statement that frames our research direction
+2. Describe papers chronologically, referencing them by:
+   - Method/model name if introduced (e.g., "MedBERT achieved...")
+   - First author (e.g., "Chen et al. demonstrated...")
+   - Never use phrases like "In our first paper" or "Our next work"
+3. Highlight specific metrics, numbers, and results that demonstrate impact
+4. Connect papers to show progression of ideas and methods
+5. Use "We" to describe our work, as these are all papers by the researcher of interest
+6. Write in a narrative style suitable for a year-end research summary blog post
+
+Write 2-3 paragraphs in a narrative style that:
+- Opens with a high-level framing of the research area
+- Shows how papers build on each other
+- Emphasizes quantitative impact and real-world significance
+- Uses concise paper references
+- Maintains an engaging, blog-post style tone while being technically precise""",
     
-    "TOPIC_SYNTHESIS": """
-    Synthesize our papers' contributions within this research topic.
-    
-    Papers:
-    {context}
-    
-    Guidelines:
-    1. Start with a clear topic statement that frames our research direction
-    2. Describe papers chronologically, referencing them by:
-       - Method/model name if introduced (e.g., "MedBERT achieved...")
-       - First author (e.g., "Chen et al. demonstrated...")
-       - Never use phrases like "In our first paper" or "Our next work"
-    3. Highlight specific metrics, numbers, and results that demonstrate impact
-    4. Connect papers to show progression of ideas and methods
-    5. Use "We" to describe our work, as these are all papers by the researcher of interest
-    
-    Write 2-3 paragraphs in a narrative style that:
-    - Opens with a high-level framing of the research area
-    - Shows how papers build on each other
-    - Emphasizes quantitative impact and real-world significance
-    - Uses concise paper references
-    
-    Example style:
-    "MedBERT established new benchmarks for medical language understanding, achieving 92% accuracy on clinical tasks. Building on this foundation, Chen et al. demonstrated a 45% improvement in diagnostic accuracy through their novel attention mechanism. The RadNet system we developed further extended these capabilities..."
-    """,
-    
-    "OVERALL_NARRATIVE": """
-    Create an introductory narrative that frames our research across these topics: {themes}
-    
-    Write 2-3 paragraphs that:
-    1. Open with a high-level statement about our mission and goals
-    2. Frame the key challenges we're addressing in medical AI
-    3. Introduce the major themes ({themes}) that our work spans
-    
-    Example style:
-    "I'm excited to share highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Our recent progress brings us closer to that goal.
-    
-    Our focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our perspective with Topol et al., GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
-    
-    Use "We" to describe our work, as these are all papers by the researcher of interest.
-    Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
-    """,
+    "OVERALL_NARRATIVE": """Create an introductory narrative that frames our research across these topics: {themes}
+
+Write 3-4 paragraphs that:
+1. Open with a personal, engaging introduction about the year's research mission
+2. Frame the key challenges we're addressing in medical AI
+3. Introduce the major themes that our work spans
+4. Set up the detailed accomplishments that will follow
+
+Example style:
+"As 2024 wraps up, I'm eager to share some research highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Major progress made this year brings us closer to that goal.
+
+Our primary 2024 focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our Nature perspective with Eric Topol and colleagues, GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
+
+Use "We" to describe our work, as these are all papers by the researcher of interest.
+Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
+
+The narrative should feel like a natural blog post introduction while maintaining technical precision.""",
+    "COMBINED_PAPER_ANALYSIS": """Analyze this academic paper and extract the following information in a structured format:
+1. Title: Extract the paper title
+2. Authors: List all authors with both first and last names
+3. Summary: Provide a focused technical summary that:
+   - Identifies the specific research problem addressed
+   - Describes the key technical innovation and methodological approach
+   - Highlights main empirical findings and quantitative results
+   - Uses 2-3 clear, concise sentences
+4. Impact Weight: Score from 0-1 based on paper significance
+
+Text: {text}
+
+Return a JSON object with these exact keys:
+{
+    "title": "string",
+    "authors": ["string"],
+    "summary": "string",
+    "weight": float
+}""",
 }
 
 # Base Classes
@@ -364,38 +386,123 @@ class ResearchSummaryManager(FileManager):
 
 # Processing Classes
 class LLMProcessor:
-    """Handles all LLM interactions with consistent error handling and caching."""
+    """Handles all LLM interactions."""
     
-    def __init__(self, llm: ChatOpenAI, cache_manager: Optional[CacheManager] = None):
+    def __init__(self, llm: ChatOpenAI):
         self.llm = llm
-        self.cache = cache_manager
-        self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in PROMPTS.items()}
+        # Keep prompts as raw strings
+        self.prompts = {
+            "COMBINED_PAPER_ANALYSIS": """Analyze this academic paper and extract the following information in a structured format:
+1. Title: Extract the paper title
+2. Authors: List all authors with both first and last names
+3. Summary: Provide a focused technical summary that:
+   - Identifies the specific research problem addressed
+   - Describes the key technical innovation and methodological approach
+   - Highlights main empirical findings and quantitative results
+   - Uses 2-3 clear, concise sentences
+4. Impact Weight: Score from 0-1 based on paper significance
+
+Text: {text}""",
+            "NAME_NORMALIZATION": """Normalize these author names by following these rules EXACTLY:
+1. Keep ONLY first and last name, remove ALL middle names/initials
+2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
+3. Convert ALL special characters to their basic form:
+   - á,à,ä,â -> a
+   - é,è,ë,ê -> e
+   - í,ì,ï,î -> i
+   - ó,ò,ö,ô -> o
+   - ú,ù,ü,û -> u
+   - ñ -> n
+4. MAINTAIN the EXACT capitalization from the original names
+5. Remove ALL extra spaces
+
+Original names:
+{name}
+
+Return ONLY the normalized names, one per line.""",
+            "CLUSTERING": """Group these papers into {num_topics} distinct research topics.
+
+Papers:
+{papers}
+
+Requirements:
+1. Each paper MUST be assigned to EXACTLY ONE topic
+2. Each topic should have between {min_papers} and {max_papers} papers
+3. Target number of papers per topic is {target_per_topic:.1f}
+4. Ensure at least one major paper (weight 1.0) per topic if possible
+
+Guidelines for topic names:
+1. Make a clear, declarative statement about our research contribution
+2. Focus on our specific technical innovations and their impact
+3. Use natural language (no underscores)
+4. Emphasize our novel methodology and its demonstrated benefits
+
+Return ONLY a JSON object with topic names as keys and paper indices as values.
+Each paper index should appear exactly once across all topics.""",
+            "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
+
+Papers:
+{context}
+
+Guidelines:
+1. Start with a clear topic statement that frames our research direction
+2. Describe papers chronologically, referencing them by:
+   - Method/model name if introduced (e.g., "MedBERT achieved...")
+   - First author (e.g., "Chen et al. demonstrated...")
+   - Never use phrases like "In our first paper" or "Our next work"
+3. Highlight specific metrics, numbers, and results that demonstrate impact
+4. Connect papers to show progression of ideas and methods
+5. Use "We" to describe our work, as these are all papers by the researcher of interest
+6. Write in a narrative style suitable for a year-end research summary blog post
+
+Write 2-3 paragraphs in a narrative style that:
+- Opens with a high-level framing of the research area
+- Shows how papers build on each other
+- Emphasizes quantitative impact and real-world significance
+- Uses concise paper references
+- Maintains an engaging, blog-post style tone while being technically precise""",
+            "OVERALL_NARRATIVE": """Create an introductory narrative that frames our research across these topics: {themes}
+
+Write 3-4 paragraphs that:
+1. Open with a personal, engaging introduction about the year's research mission
+2. Frame the key challenges we're addressing in medical AI
+3. Introduce the major themes that our work spans
+4. Set up the detailed accomplishments that will follow
+
+Example style:
+"As 2024 wraps up, I'm eager to share some research highlights from our team's latest medical AI advances. We've been on a mission to develop artificial intelligence that can match exceptional doctors in both specialty tasks and flexible clinical thinking. Major progress made this year brings us closer to that goal.
+
+Our primary 2024 focus has been developing Generalist Medical AI (GMAI) systems. As introduced in our Nature perspective with Eric Topol and colleagues, GMAI systems are designed to closely resemble doctors in their ability to reason through medical tasks, incorporate multiple data modalities, and communicate naturally..."
+
+Use "We" to describe our work, as these are all papers by the researcher of interest.
+Keep the focus on introducing the themes - the detailed accomplishments will be covered in the topic syntheses that follow.
+
+The narrative should feel like a natural blog post introduction while maintaining technical precision."""
+        }
+        # Create prompt templates
+        self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in self.prompts.items()}
     
-    def invoke_with_retry(
-        self,
-        prompt_key: str,
-        max_retries: int = 3,
-        **kwargs
-    ) -> str:
-        """Invoke LLM with retry logic and error handling."""
+    def invoke(self, prompt_key: str, **kwargs) -> str:
+        """Invoke LLM with error handling."""
         if prompt_key not in self.prompts:
             logger.error(f"Prompt key '{prompt_key}' not found in available prompts: {list(self.prompts.keys())}")
             raise KeyError(f"Invalid prompt key: {prompt_key}")
             
-        for attempt in range(max_retries):
-            try:
-                prompt = self.prompts[prompt_key]
-                logger.debug(f"Attempting {prompt_key} (try {attempt + 1}/{max_retries})")
+        try:
+            prompt = self.prompts[prompt_key]
+            if prompt_key == "COMBINED_PAPER_ANALYSIS":
+                # Use structured output for paper analysis
+                structured_llm = self.llm.with_structured_output(PaperAnalysis)
+                result = structured_llm.invoke(prompt.format(**kwargs))
+                return result  # Returns PaperAnalysis dict
+            else:
+                # Regular string output for other prompts
                 result = self.llm.invoke(prompt.format(**kwargs))
                 return result.content.strip()
-            except Exception as e:
-                logger.error(f"Error in attempt {attempt + 1} for {prompt_key}: {str(e)}")
-                logger.debug(f"Prompt args: {kwargs}")
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed all retries for {prompt_key}")
-                    logger.error(traceback.format_exc())
-                    raise
-                logger.warning(f"Retrying {prompt_key} ({attempt + 1}/{max_retries})")
+        except Exception as e:
+            logger.error(f"Error in LLM call for {prompt_key}: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
 
 class DocumentProcessor:
     """Handles document loading and text extraction."""
@@ -546,8 +653,7 @@ class Paper:
     file_path: str
     title: str
     authors: List[Author]
-    summary: str
-    brief_summary: str
+    summary: str  # Single focused technical summary
     weight: float
     role: str
     original_text: str = ""
@@ -568,7 +674,6 @@ class Paper:
             title=cache_data.get("title", "Untitled"),
             authors=authors,
             summary=cache_data["summary"],
-            brief_summary=cache_data.get("brief_summary", ""),
             weight=cache_data.get("weight", 0.1),
             role=cache_data.get("role", "unknown"),
             original_text=cache_data.get("original_text", ""),
@@ -596,7 +701,6 @@ class Paper:
                 for a in self.authors
             ],
             "summary": self.summary,
-            "brief_summary": self.brief_summary,
             "weight": self.weight,
             "role": self.role,
             "original_text": self.original_text,
@@ -756,37 +860,36 @@ def process_pdf(
         
         logger.info(f"Text extracted successfully from {pdf_file} ({len(text)} chars)")
 
-        # Use structured output with JSON schema
-        structured_llm = llm_processor.llm.with_structured_output(PAPER_ANALYSIS_SCHEMA)
-        analysis_data = structured_llm.invoke(
-            f"Analyze this academic paper and extract the key information: {text}"
+        # Single LLM call for combined analysis with full text
+        analysis_data = llm_processor.invoke(
+            "COMBINED_PAPER_ANALYSIS",
+            text=text
         )
+        # analysis_data is already a PaperAnalysis dict, no need to parse JSON
+            
+        # Create author objects (single batch of normalizations)
+        author_names = analysis_data.get("authors", [])
+        normalized_names = []
+        if author_names:
+            # Single LLM call to normalize all author names at once
+            names_text = "\n".join(author_names)
+            normalized_text = llm_processor.invoke(
+                "NAME_NORMALIZATION",
+                name=names_text
+            )
+            normalized_names = [name.strip() for name in normalized_text.split("\n") if name.strip()]
         
-        # analysis_data is now a dict, so use dict access
-        if analysis_data["authors"]:
-            normalized_names = [
-                llm_processor.invoke_with_retry(
-                    "NAME_NORMALIZATION",
-                    name=author_name
-                )
-                for author_name in analysis_data["authors"]
-            ]
-        else:
-            normalized_names = []
-        
-        # Create author objects
         authors = [
             Author(full_name=orig, normalized_name=norm)
-            for orig, norm in zip(analysis_data["authors"], normalized_names)
+            for orig, norm in zip(author_names, normalized_names)
         ]
         
-        # Create paper object
+        # Create paper object with single summary
         paper = Paper.create(
             pdf_file=pdf_file,
             title=analysis_data["title"],
             authors=authors,
-            summary=analysis_data["technical_summary"],
-            brief_summary=analysis_data["brief_summary"],
+            summary=analysis_data["summary"],
             weight=analysis_data["weight"],
             role="primary_research",
             original_text=text
@@ -798,8 +901,7 @@ def process_pdf(
             "title": paper.title,
             "file_path": paper.file_path,
             "authors": [{"full_name": a.full_name, "normalized_name": a.normalized_name} for a in paper.authors],
-            "brief_summary": paper.brief_summary,
-            "technical_summary": paper.summary,
+            "summary": paper.summary,
             "weight": paper.weight,
             "role": paper.role
         }
@@ -891,7 +993,7 @@ def create_topic_synthesis(
         for ps in sorted_summaries
     ]
     
-    synthesis = llm_processor.invoke_with_retry(
+    synthesis = llm_processor.invoke(
         "TOPIC_SYNTHESIS",
         context=summaries_context
     )
@@ -915,7 +1017,7 @@ def generate_overall_narrative(
     theme_titles = [topic.name for topic in topic_syntheses]
     
     # Generate introductory narrative
-    intro_narrative = llm_processor.invoke_with_retry(
+    intro_narrative = llm_processor.invoke(
         "OVERALL_NARRATIVE",
         themes=theme_titles
     )
@@ -1119,7 +1221,7 @@ def group_papers_by_topic(
         })
     
     # Update clustering prompt to emphasize mutual exclusivity
-    clustering_result = llm_processor.invoke_with_retry(
+    clustering_result = llm_processor.invoke(
         "CLUSTERING",
         papers=paper_list,
         num_topics=num_topics,
