@@ -17,6 +17,7 @@ from langchain_openai import OpenAIEmbeddings
 import numpy as np
 import logging
 import traceback
+import csv
 from datetime import datetime
 import shutil
 
@@ -51,6 +52,27 @@ class ResearchArea(TypedDict):
 
 class ClusteringOutput(TypedDict):
     research_areas: List[ResearchArea]
+
+class PaperOutput(TypedDict):
+    title: str
+    authors: List[Dict[str, str]]  # List of dicts with full_name and normalized_name
+    summary: str
+    weight: float
+    role: str
+    file_path: str
+
+class TopicOutput(TypedDict):
+    name: str
+    synthesis: str  # The topic's narrative synthesis
+    papers: List[PaperOutput]  # Complete paper information
+
+class NarrativeOutput(TypedDict):
+    author: str
+    introduction: str
+    topics: List[TopicOutput]  # Complete topic information including papers
+
+class SynthesisOutput(TypedDict):
+    synthesis: str  # The detailed synthesis of papers
 
 # Configure logging
 def setup_logging():
@@ -177,7 +199,7 @@ PROMPTS = {
        - Example: "We introduced MedBERT, a new language model for..."
     3. Main empirical findings and quantitative results
     
-    Keep to 2-3 sentences that highlight the core technical contribution.
+    Write EXACTLY {target_sentences} clear, concise sentences that highlight the core technical contribution.
     Use "We" to describe our work, as this is authored by the researcher of interest.
     """,
     
@@ -219,12 +241,12 @@ Return a list of research areas, where each area has:
 
 IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
     
-    "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
+    "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area: {name}
 
 Papers:
 {context}
 
-Guidelines:
+Guidelines for synthesis:
 1. Present our work's role in advancing this technical area
 2. Reference papers concisely by:
    - Method names when notable (e.g., "The model achieved...")
@@ -236,39 +258,38 @@ Guidelines:
 5. Use "we" and "our" naturally without being overly promotional
 6. Write in a technical yet accessible style
 
-Structure each synthesis to:
+Write EXACTLY {target_sentences} sentences that:
 - Open with the area's technical significance
 - Detail key methodological advances
 - Present quantitative results and impact
 - Show connections between different approaches
 - Balance confidence with objectivity
 
-Example:
+Example style:
 "We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
 
 Keep the tone confident but grounded, focusing on concrete technical achievements.""",
     
-    "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
+    "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
 
-Guidelines:
-1. Frame our work's contribution to advancing the field
-2. Present our innovations in addressing key technical challenges
-3. Show how research areas complement each other
-4. Balance enthusiasm with objectivity
+Write EXACTLY {target_sentences} sentences that:
+1. Open with our SPECIFIC technical contributions and innovations
+2. Focus on CONCRETE methodological advances and quantitative results
+3. Show how different technical approaches complement each other
+4. Maintain technical precision while being accessible
 
-Key Style Elements:
+Key Requirements:
+- Start with "Our research advances..." or similar active framing
+- Name specific technical innovations or methodologies in first paragraph
+- Include at least one quantitative result or metric
+- Focus on methodological contributions rather than general impact
 - Use first-person plural ("we", "our") naturally
-- Focus on concrete technical achievements
-- Connect advances to real challenges
-- Maintain technical precision
-- Balance confidence with humility
+- Balance technical detail with clarity
 
 Example Style:
-"Our research focuses on developing robust and adaptable AI systems that can handle complex real-world tasks. Through advances in uncertainty quantification and multi-modal learning, we've developed approaches that help bridge the gap between specialized models and flexible reasoning.
+"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
 
-Our work spans several technical areas, from uncertainty estimation in high-stakes applications to integrating diverse data types. These complementary advances work together to improve the reliability and capability of AI systems..."
-
-Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
+Keep the narrative focused on specific technical achievements while maintaining accessibility.""",
 }
 
 # Base Classes
@@ -382,7 +403,7 @@ class ResearchSummaryManager(FileManager):
         # Use self.base_dir from FileManager instead of creating new Path
         self.papers_dir = self.base_dir / "papers"
         self.topics_dir = self.base_dir / "topics"
-        self.narrative_path = self.base_dir / "year_in_review_narrative.txt"
+        self.narrative_path = self.base_dir / "narrative.json"
         
         # Create directories
         for directory in [self.papers_dir, self.topics_dir]:
@@ -476,12 +497,12 @@ Return a list of research areas, where each area has:
 2. A list of paper indices that belong to that area
 
 IMPORTANT: Every paper index MUST appear exactly once across all areas. If a paper doesn't perfectly fit any area, assign it to the most related area.""",
-            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area.
+            "TOPIC_SYNTHESIS": """Synthesize our contributions within this research area: {name}
 
 Papers:
 {context}
 
-Guidelines:
+Guidelines for synthesis:
 1. Present our work's role in advancing this technical area
 2. Reference papers concisely by:
    - Method names when notable (e.g., "The model achieved...")
@@ -493,33 +514,37 @@ Guidelines:
 5. Use "we" and "our" naturally without being overly promotional
 6. Write in a technical yet accessible style
 
-Structure each synthesis to:
+Write EXACTLY {target_sentences} sentences that:
 - Open with the area's technical significance
 - Detail key methodological advances
 - Present quantitative results and impact
 - Show connections between different approaches
 - Balance confidence with objectivity
 
-Example:
+Example style:
 "We developed novel approaches to uncertainty quantification that improve model reliability in high-stakes applications. Our calibration method achieved a 40% reduction in error rates while maintaining high performance. By combining this with robust validation techniques, we enabled more reliable deployment across diverse settings..."
 
 Keep the tone confident but grounded, focusing on concrete technical achievements.""",
-            "OVERALL_NARRATIVE": """Create an introductory narrative that connects our research across these areas: {themes}
+            "OVERALL_NARRATIVE": """Create a focused technical introduction that connects our research across these areas: {themes}
 
-Guidelines:
-1. Frame our work's contribution to advancing the field
-2. Present our innovations in addressing key technical challenges
-3. Show how research areas complement each other
-4. Balance enthusiasm with objectivity
+Write EXACTLY {target_sentences} sentences that:
+1. Open with our SPECIFIC technical contributions and innovations
+2. Focus on CONCRETE methodological advances and quantitative results
+3. Show how different technical approaches complement each other
+4. Maintain technical precision while being accessible
 
-Key Style Elements:
+Key Requirements:
+- Start with "Our research advances..." or similar active framing
+- Name specific technical innovations or methodologies in first paragraph
+- Include at least one quantitative result or metric
+- Focus on methodological contributions rather than general impact
 - Use first-person plural ("we", "our") naturally
-- Focus on concrete technical achievements
-- Connect advances to real challenges
-- Maintain technical precision
-- Balance confidence with humility
+- Balance technical detail with clarity
 
-Keep the narrative focused on concrete technical achievements while maintaining accessibility."""
+Example Style:
+"Our research advances medical image analysis through three key innovations: a novel contrastive learning framework that reduces error rates by 40%, an uncertainty quantification method that improves model calibration, and a knowledge graph approach for semantic validation. These complementary technical advances address fundamental challenges in reliable AI-driven medical analysis..."
+
+Keep the narrative focused on specific technical achievements while maintaining accessibility.""",
         }
         # Create prompt templates
         self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in self.prompts.items()}
@@ -563,8 +588,8 @@ class DocumentProcessor:
         llm_processor: LLMProcessor
     ) -> Tuple[str, List[str]]:
         """Extract title and authors from text."""
-        title = llm_processor.invoke_with_retry("TITLE_EXTRACTION", text=text[:2000])
-        author_text = llm_processor.invoke_with_retry("AUTHOR_EXTRACTION", text=text[:2000])
+        title = llm_processor.invoke("TITLE_EXTRACTION", text=text)
+        author_text = llm_processor.invoke("AUTHOR_EXTRACTION", text=text)
         return title, [name.strip() for name in author_text.split('\n') if name.strip()]
 
 class ParallelProcessor:
@@ -619,27 +644,6 @@ class SummaryGenerator:
     def __init__(self, llm_processor: LLMProcessor):
         self.llm = llm_processor
     
-    def create_paper_summary(
-        self,
-        paper: Paper,
-        cache_key: Optional[str] = None
-    ) -> PaperSummary:
-        """Create a complete paper summary."""
-        brief = self.llm.invoke_with_retry(
-            "BRIEF_SUMMARY",
-            summary=paper.summary
-        )
-        technical = self.llm.invoke_with_retry(
-            "PAPER_SUMMARY",
-            summary=paper.summary
-        )
-        return PaperSummary(
-            paper=paper,
-            brief_summary=brief,
-            technical_summary=technical,
-            weight=paper.weight
-        )
-    
     def create_topic_summary(
         self,
         name: str,
@@ -651,11 +655,11 @@ class SummaryGenerator:
             for p in sorted(papers, key=lambda x: x.weight, reverse=True)
         ])
         
-        narrative = self.llm.invoke_with_retry(
+        narrative = self.llm.invoke(
             "TOPIC_NARRATIVE",
             context=papers_text
         )
-        context = self.llm.invoke_with_retry(
+        context = self.llm.invoke(
             "TOPIC_CONTEXT",
             theme=name
         )
@@ -678,12 +682,12 @@ class Author:
     @classmethod
     def create(cls, name: str, llm_processor: 'LLMProcessor') -> 'Author':
         """Create an Author instance with normalized name."""
-        normalized = llm_processor.invoke_with_retry("NAME_NORMALIZATION", name=name)
+        normalized = llm_processor.invoke("NAME_NORMALIZATION", name=name)
         return cls(full_name=name, normalized_name=normalized)
     
     def matches(self, other_name: str, llm_processor: 'LLMProcessor') -> bool:
         """Check if this author matches another name."""
-        other_normalized = llm_processor.invoke_with_retry("NAME_NORMALIZATION", name=other_name)
+        other_normalized = llm_processor.invoke("NAME_NORMALIZATION", name=other_name)
         return (
             self.normalized_name.lower() == other_normalized.lower() or
             self.full_name.lower() == other_name.lower()
@@ -750,56 +754,34 @@ class Paper:
         }
 
 @dataclass
-class PaperSummary:
-    """Represents a paper's summary."""
-    paper: Paper
-    summary: str
-    weight: float
-    
-    def to_dict(self) -> dict:
-        """Convert to serializable format."""
-        return {
-            "file_path": self.paper.file_path,
-            "title": self.paper.title,
-            "summary": self.summary,
-            "weight": self.weight,
-            "authors": [
-                {
-                    "full_name": a.full_name,
-                    "normalized_name": a.normalized_name
-                }
-                for a in self.paper.authors
-            ]
-        }
-
-@dataclass
-class TopicSummary:
-    """Represents a group of related papers with their narrative."""
-    name: str
-    paper_summaries: List[PaperSummary]
-    narrative: str
-    
-    def to_dict(self) -> dict:
-        """Convert to serializable format."""
-        return {
-            "name": self.name,
-            "narrative": self.narrative,
-            "paper_summaries": [ps.to_dict() for ps in self.paper_summaries]
-        }
-
-@dataclass
 class TopicSynthesis:
     """Represents a synthesis of papers within a research topic."""
     name: str
-    paper_summaries: List[PaperSummary]
-    synthesis: str
+    papers: List[Paper]  # List of papers in this topic
+    synthesis: str  # The detailed synthesis text
     
-    def to_dict(self) -> dict:
-        """Convert to serializable format."""
+    def to_dict(self) -> TopicOutput:
+        """Convert to serializable format matching TopicOutput TypedDict."""
         return {
             "name": self.name,
             "synthesis": self.synthesis,
-            "paper_summaries": [ps.to_dict() for ps in self.paper_summaries]
+            "papers": [
+                {
+                    "title": p.title,
+                    "authors": [
+                        {
+                            "full_name": a.full_name,
+                            "normalized_name": a.normalized_name
+                        }
+                        for a in p.authors
+                    ],
+                    "summary": p.summary,
+                    "weight": p.weight,
+                    "role": p.role,
+                    "file_path": p.file_path
+                }
+                for p in self.papers
+            ]
         }
 
 # Processing Functions
@@ -1005,30 +987,11 @@ def process_papers_in_parallel(
     logger.info(f"[bold green]✓[/bold green] Completed processing {len(papers)} papers")
     return papers
 
-def generate_paper_summary(
-    paper: Paper,
-    llm_processor: LLMProcessor,
-    status_display: Optional[StatusDisplay] = None
-) -> PaperSummary:
-    """Generate summary for a paper."""
-    if status_display:
-        status_display.update(f"Generating summary for {paper.title}")
-    
-    summary = llm_processor.invoke_with_retry(
-        "PAPER_SUMMARY",
-        text=paper.original_text
-    )
-    
-    return PaperSummary(
-        paper=paper,
-        summary=summary,
-        weight=paper.weight
-    )
-
 def create_topic_synthesis(
     name: str,
-    paper_summaries: List[PaperSummary],
+    papers: List[Paper],
     llm_processor: LLMProcessor,
+    config: Dict[str, Any],
     status_display: Optional[StatusDisplay] = None
 ) -> TopicSynthesis:
     """Create a synthesis of papers within a research topic."""
@@ -1036,36 +999,42 @@ def create_topic_synthesis(
         status_display.update(f"Creating synthesis for topic: {name}")
     
     # Sort papers by weight
-    sorted_summaries = sorted(
-        paper_summaries,
+    sorted_papers = sorted(
+        papers,
         key=lambda x: x.weight,
         reverse=True
     )
     
     # Generate synthesis for this topic
-    summaries_context = [
+    papers_context = [
         {
-            "title": ps.paper.title,
-            "summary": ps.summary,
-            "weight": ps.weight
+            "title": p.title,
+            "summary": p.summary,
+            "weight": p.weight
         }
-        for ps in sorted_summaries
+        for p in sorted_papers
     ]
     
-    synthesis = llm_processor.invoke(
-        "TOPIC_SYNTHESIS",
-        context=summaries_context
+    # Use structured output for synthesis
+    structured_llm = llm_processor.llm.with_structured_output(SynthesisOutput)
+    synthesis_output = structured_llm.invoke(
+        llm_processor.prompts["TOPIC_SYNTHESIS"].format(
+            name=name,
+            context=papers_context,
+            target_sentences=config["TOPIC_SUMMARY_SENTENCES"]
+        )
     )
     
     return TopicSynthesis(
         name=name,
-        paper_summaries=sorted_summaries,
-        synthesis=synthesis
+        papers=sorted_papers,
+        synthesis=synthesis_output["synthesis"]
     )
 
 def generate_overall_narrative(
     topic_syntheses: List[TopicSynthesis],
     llm_processor: LLMProcessor,
+    config: Dict[str, Any],
     status_display: Optional[StatusDisplay] = None
 ) -> str:
     """Generate the overall narrative of research accomplishments."""
@@ -1078,7 +1047,8 @@ def generate_overall_narrative(
     # Generate introductory narrative
     intro_narrative = llm_processor.invoke(
         "OVERALL_NARRATIVE",
-        themes=theme_titles
+        themes=theme_titles,
+        target_sentences=config["NARRATIVE_SENTENCES"]
     )
     
     # Build complete narrative with topic syntheses
@@ -1121,17 +1091,11 @@ def validate_author_name(name: str) -> Tuple[bool, str]:
     return True, ""
 
 def generate_csv_summary(
-    topic_summaries: List[TopicSynthesis],
+    topic_syntheses: List[TopicSynthesis],
     output_path: str,
     status_display: Optional[StatusDisplay] = None
 ) -> None:
-    """Generate a CSV summary of all topics and papers.
-    
-    Args:
-        topic_summaries: List of topic syntheses
-        output_path: Path to save the CSV file
-        status_display: Optional status display for progress updates
-    """
+    """Generate a CSV summary of all topics and papers."""
     if status_display:
         status_display.update("Generating CSV summary")
     
@@ -1140,22 +1104,20 @@ def generate_csv_summary(
     
     # Prepare CSV data
     rows = []
-    
-    # Add header row
     headers = ["Topic", "Paper Title", "Authors", "Summary", "Weight"]
     
     # Add data for each topic and paper
-    for topic in topic_summaries:
-        for paper_summary in topic.paper_summaries:
+    for topic in topic_syntheses:
+        for paper in topic.papers:
             # Format authors as semicolon-separated list using normalized names
-            authors = "; ".join(a.normalized_name for a in paper_summary.paper.authors)
+            authors = "; ".join(a.normalized_name for a in paper.authors)
             
             rows.append([
                 topic.name,
-                paper_summary.paper.title,
+                paper.title,
                 authors,
-                paper_summary.summary,
-                f"{paper_summary.weight:.2f}"
+                paper.summary,
+                f"{paper.weight:.2f}"
             ])
     
     # Write to CSV
@@ -1176,7 +1138,7 @@ def generate_csv_summary(
 def run_pdf_summarization(
     config: Optional[dict] = None,
     status_display: Optional[StatusDisplay] = None
-) -> Tuple[List[TopicSummary], str]:
+) -> Tuple[List[TopicSynthesis], str]:
     """Main function to run the PDF summarization pipeline."""
     try:
         # Load and validate configuration
@@ -1220,7 +1182,6 @@ def run_pdf_summarization(
         ) as progress:
             # Create tasks for each stage
             task_papers = progress.add_task("[cyan]Processing papers...", total=len(pdf_files))
-            task_summaries = progress.add_task("[cyan]Generating summaries...", total=len(pdf_files), visible=False)
             task_grouping = progress.add_task("[cyan]Grouping papers...", total=1, visible=False)
             task_topics = progress.add_task("[cyan]Creating topic summaries...", total=5, visible=False)
             task_narrative = progress.add_task("[cyan]Generating narrative...", total=1, visible=False)
@@ -1235,17 +1196,6 @@ def run_pdf_summarization(
             )
             progress.update(task_papers, completed=len(pdf_files))
             
-            # Convert to summaries
-            progress.update(task_summaries, visible=True)
-            paper_summaries = []
-            for paper in papers:
-                paper_summaries.append(PaperSummary(
-                    paper=paper,
-                    summary=paper.summary,
-                    weight=paper.weight
-                ))
-                progress.advance(task_summaries)
-            
             # Group papers
             progress.update(task_grouping, visible=True)
             topic_groups = group_papers_by_topic(
@@ -1256,45 +1206,54 @@ def run_pdf_summarization(
             )
             progress.update(task_grouping, completed=1)
             
-            # Create topic summaries
+            # Create topic syntheses
             progress.update(task_topics, visible=True, total=len(topic_groups))
-            topic_summaries = []
+            topic_syntheses = []
             for topic_name, topic_papers in topic_groups.items():
-                topic_summary = create_topic_synthesis(
+                topic_synthesis = create_topic_synthesis(
                     name=topic_name,
-                    paper_summaries=[ps for ps in paper_summaries if ps.paper in topic_papers],
+                    papers=topic_papers,
                     llm_processor=llm_processor,
+                    config=cfg,
                     status_display=status_display
                 )
-                topic_summaries.append(topic_summary)
+                topic_syntheses.append(topic_synthesis)
                 
-                # Save topic summary
+                # Save topic synthesis
                 topic_path = manager.get_topic_path(topic_name)
-                manager.save_json(topic_path, topic_summary.to_dict())
+                manager.save_json(topic_path, topic_synthesis.to_dict())
                 progress.advance(task_topics)
             
             # Generate narrative
             progress.update(task_narrative, visible=True)
             narrative = generate_overall_narrative(
-                topic_syntheses=topic_summaries,
+                topic_syntheses=topic_syntheses,
                 llm_processor=llm_processor,
+                config=cfg,
                 status_display=status_display
             )
             progress.update(task_narrative, completed=1)
         
-        # Save narrative
-        with open(manager.narrative_path, "w") as f:
-            f.write(narrative)
+        # Update narrative JSON structure to include complete information
+        narrative_json: NarrativeOutput = {
+            "author": cfg["AUTHOR_NAME"],
+            "introduction": narrative.split("\n\n")[0],
+            "topics": [topic.to_dict() for topic in topic_syntheses]  # Use the topic syntheses directly
+        }
+
+        # Save as JSON with complete hierarchical structure
+        with open(manager.narrative_path.with_suffix('.json'), "w", encoding='utf-8') as f:
+            json.dump(narrative_json, f, indent=2, ensure_ascii=False)
         
         # Generate CSV summary
         generate_csv_summary(
-            topic_summaries=topic_summaries,
+            topic_syntheses=topic_syntheses,
             output_path=cfg["CSV_OUTPUT"],
             status_display=status_display
         )
         
         logger.info("[bold green]✓ Processing completed successfully![/bold green]")
-        return topic_summaries, narrative
+        return topic_syntheses, narrative
         
     except Exception as e:
         logger.error("[bold red]Fatal error in PDF summarization pipeline[/bold red]", exc_info=True)
@@ -1449,7 +1408,7 @@ if __name__ == "__main__":
         
         status_display = StatusDisplay()
         topics, narrative = run_pdf_summarization(status_display=status_display)
-        console.print("\n[green bold]✓ Processing completed successfully![/green bold]")
+        console.print("\n[green bold] Processing completed successfully![/green bold]")
         
     except Exception as e:
         console.print_exception(show_locals=True)

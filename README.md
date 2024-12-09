@@ -1,35 +1,37 @@
-# ResearchRadar 🎯
+# MyResearchWrapped 🎯✨
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-ResearchRadar is an AI-powered tool that transforms how researchers understand and present their academic contributions. By analyzing your research papers, it automatically discovers meaningful patterns, generates insightful summaries, and weaves your work into a cohesive narrative.
+Ever wondered what your research story would look like if it got the Spotify Wrapped treatment? MyResearchWrapped is your personal academic year-in-review generator, turning your papers into beautiful, shareable insights about your research in 2024.
 
-## Why ResearchRadar?
+## Your Research Story, Beautifully Told
 
-Traditional paper organization is time-consuming and often misses the bigger picture. ResearchRadar changes this by using advanced AI to analyze your entire body of work at once. It identifies research themes, tracks your methodological evolution, and helps you understand your impact across different areas.
+Traditional academic summaries can be dry and one-dimensional. My Research Wrapped changes that by transforming your publications into an engaging, visual story that reveals:
 
-The tool excels at finding connections between papers that might not be immediately obvious. Using semantic analysis and topic modeling, it groups related work into meaningful research areas, making it perfect for:
+- Your top research areas and their evolution over time 🚀
+- Hidden connections between your different papers 🔄
+- The impact and reach of your work 📊
+- Your unique "research personality" based on your methodological preferences 🎨
 
-- Preparing research statements or tenure packages
-- Understanding your research trajectory
-- Identifying emerging themes in your work
-- Creating compelling research narratives
+Perfect for:
+- Sharing your year's achievements on social media
+- Adding flair to your tenure package
+- Understanding your research evolution
+- Discovering surprising patterns in your work
 
-## Getting Started
-
-Setting up ResearchRadar is straightforward:
+## Get Your Wrapped
 
 ```bash
-# Clone and set up the environment
-git clone https://github.com/pranavrajpurkar/research-radar.git
-cd research-radar
+# Clone and set up
+git clone https://github.com/pranavrajpurkar/research-wrapped.git
+cd research-wrapped
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure your environment
+# Set up your personalization
 cp .env.example .env
 # Add your OpenAI API key to .env
 
@@ -39,7 +41,7 @@ python research_radar.py
 
 ## How It Works
 
-ResearchRadar processes your research papers in three main stages:
+MyResearchWrapped processes your research papers in three main stages:
 
 1. **Analysis**: Each paper is processed using advanced language models to extract key information, normalize author names, and identify core contributions.
 
@@ -49,7 +51,7 @@ ResearchRadar processes your research papers in three main stages:
 
 ## Configuration
 
-ResearchRadar is highly configurable through `config.py`. Here are the key settings:
+MyResearchWrapped is highly configurable through `config.py`. Here are the key settings:
 
 ```python
 DEFAULT_CONFIG = {
@@ -74,7 +76,7 @@ outputs/
 ## Advanced Features
 
 ### Smart Author Detection
-ResearchRadar uses AI to handle the complexities of author names, accounting for variations in formatting, special characters, and academic titles. This ensures consistent author tracking across your publications.
+MyResearchWrapped uses AI to handle the complexities of author names, accounting for variations in formatting, special characters, and academic titles. This ensures consistent author tracking across your publications.
 
 ### Topic Analysis
 The semantic clustering algorithm identifies research themes while maintaining balance - ensuring each area has enough papers to be meaningful, but not so many that distinct contributions are lost.
@@ -92,7 +94,7 @@ If you encounter issues:
 
 ## Contributing
 
-We welcome contributions! If you'd like to improve ResearchRadar:
+We welcome contributions! If you'd like to improve MyResearchWrapped:
 
 1. Fork the repository
 2. Create your feature branch
@@ -105,7 +107,7 @@ Copyright (c) 2024 Pranav Rajpurkar. This project is [MIT](./LICENSE) licensed.
 
 ## Acknowledgments
 
-ResearchRadar builds on these excellent open-source projects:
+MyResearchWrapped builds on these excellent open-source projects:
 - [LangChain](https://github.com/hwchase17/langchain) for AI orchestration
 - [OpenAI](https://github.com/openai/openai-python) for language models
 - [Rich](https://github.com/Textualize/rich) for beautiful terminal output
