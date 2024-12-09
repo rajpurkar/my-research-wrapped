@@ -1168,8 +1168,8 @@ def generate_csv_summary(
     # Add data for each topic and paper
     for topic in topic_summaries:
         for paper_summary in topic.paper_summaries:
-            # Format authors as semicolon-separated list
-            authors = "; ".join(a.full_name for a in paper_summary.paper.authors)
+            # Format authors as semicolon-separated list using normalized names
+            authors = "; ".join(a.normalized_name for a in paper_summary.paper.authors)
             
             rows.append([
                 topic.name,
