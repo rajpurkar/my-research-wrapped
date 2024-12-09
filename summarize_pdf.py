@@ -1,27 +1,51 @@
+# 1. Imports and Configuration
+from __future__ import annotations
 import glob
 import os
 import json
 import hashlib
 from pathlib import Path
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import TYPE_CHECKING, List, Dict, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
 from dataclasses import dataclass
-from collections import Counter
+from collections import Counter, defaultdict
 import unicodedata
+from langchain_community.document_loaders import PyPDFLoader
+import logging
+import traceback
+from datetime import datetime
+
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich import print as rprint
 
 from langchain.chains.summarize import load_summarize_chain
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
-from collections import defaultdict
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+
+if TYPE_CHECKING:
+    from typing import Any, Callable
+
+# Configure logging
+def setup_logging():
+    """Configure logging with timestamps and levels"""
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.FileHandler('pdf_summarizer.log'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 # Initialize rich console
 console = Console()
@@ -37,11 +61,11 @@ DEFAULT_CONFIG = {
     
     # Directory settings
     "PDF_FOLDER": "pdfs",
-    "OUTPUT_DIR": "outputs",
+    "OUTPUT_DIR": "outputs",  # Simplified output path
     
     # Processing settings
     "NUM_TOPICS": 5,
-    "MAX_WORKERS": 16,
+    "MAX_WORKERS": 32,  # Increased for faster processing
     
     # Cache settings
     "CACHE_VERSION": "2.0",
@@ -131,7 +155,7 @@ PROMPTS = {
     
     "BRIEF_SUMMARY": """
     Provide a 1-2 sentence technical summary of this paper's key contribution:
-    {summary}
+    {text}
     
     Focus on the specific technical innovation and results.
     """,
@@ -213,18 +237,68 @@ PROMPTS = {
     Focus on technical aspects and methodological innovations.
     """,
     
-    "PAPER_EXTRACTION": """
-    Summarize this research paper in 2-3 sentences, focusing on:
-    1. The main contribution or innovation
-    2. Key results or findings
+    "TOPIC_CLUSTERING": """
+    You will be provided with a list of research paper summaries along with their weights.
+    Please cluster these papers into exactly {num_topics} topics, each representing a clear research claim or contribution.
+    
+    Papers:
+    {papers}
+    
+    Distribution requirements:
+    - Each topic should have between {min_papers} and {max_papers} papers
+    - Target number of papers per topic is {target_per_topic:.1f}
+    - Ensure at least one major paper (weight 1.0) per topic if possible
+    
+    Guidelines for topic names:
+    1. Make a clear, declarative statement about the research contribution
+    2. Focus on specific technical innovations and their impact
+    3. Use natural language (no underscores)
+    4. Emphasize the novel methodology and its demonstrated benefits
+    
+    Bad topic names:
+    - Too vague (just stating a field)
+    - Not making a specific claim
+    - Not mentioning technical approach
+    - Using technical notation or jargon
+    
+    Each topic should:
+    - Make a specific claim about technical innovation
+    - Focus on shared methodological advances
+    
+    Return ONLY a JSON object with topic names as keys and paper indices as values.
+    """,
+    
+    "TECHNICAL_SUMMARY": """
+    Provide a detailed technical summary of this paper's key contribution:
+    {text}
+    
+    Include:
+    1. The specific research problem or challenge being addressed
+    2. The key technical innovations and methodological approach
+    3. The main empirical findings and quantitative results
+    4. The broader implications or applications of the work
+    
+    Focus on concrete details - use numbers, metrics, and specific technical terms.
+    Keep to 3-4 sentences that highlight the core technical contribution.
+    """,
+    
+    "PAPER_ANALYSIS": """
+    Analyze this research paper and extract the following information:
     
     Text: {text}
     
-    Provide ONLY the summary, no additional text.
-    """
+    Return a JSON object with these fields:
+    1. "title": The paper's full title
+    2. "authors": List of author names (first and last names)
+    3. "summary": A technical summary of the key contributions (3-4 sentences)
+    4. "weight": A score from 0.1 to 1.0 indicating the paper's technical depth and significance
+    5. "role": One of ["primary_research", "survey", "case_study", "technical_report"]
+    
+    Focus on extracting accurate technical details and maintain the original formatting of names.
+    """,
 }
 
-# Add a new base class for file operations
+# Base Classes
 class FileManager:
     """Base class for file operations with common utilities."""
     
@@ -234,16 +308,13 @@ class FileManager:
         
     def get_path(self, filename: str | Path) -> Path:
         """Get full path for a file."""
-        # If filename is already a Path object and is absolute, return it directly
         if isinstance(filename, Path) and filename.is_absolute():
             return filename
-        # Otherwise, join it with base_dir
         return self.base_dir / str(filename)
         
     def save_json(self, filename: str | Path, data: dict):
         """Save data as JSON."""
         path = self.get_path(filename)
-        # Ensure parent directory exists
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, 'w') as f:
             json.dump(data, f, indent=4)
@@ -259,18 +330,72 @@ class FileManager:
                     return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
                 return data
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"[ERROR] Failed to load {filename}: {e}")
+                console.print(f"[red]Failed to load {filename}: {e}[/red]")
                 return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
         return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
 
-# Update ResearchSummaryManager to inherit from FileManager
+class CacheManager:
+    """Handles all caching operations."""
+    
+    def __init__(self, manager: 'ResearchSummaryManager'):
+        self.manager = manager
+    
+    def get_cache_key(self, pdf_path: str) -> str:
+        """Generate a cache key based on file path and last modified time."""
+        pdf_stats = os.stat(pdf_path)
+        content_key = f"{pdf_path}:{pdf_stats.st_mtime}"
+        return hashlib.md5(content_key.encode()).hexdigest()
+    
+    def is_cached(self, pdf_path: str) -> bool:
+        """Check if a paper is cached and valid."""
+        paper_hash = self.get_cache_key(pdf_path)
+        cache_file = self.manager.get_paper_cache_path(paper_hash)
+        
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                return cache_data.get("version") == DEFAULT_CONFIG["CACHE_VERSION"]
+            except (json.JSONDecodeError, KeyError):
+                return False
+        return False
+    
+    def get_cache(self, pdf_path: str) -> dict:
+        """Get cache data for a paper."""
+        paper_hash = self.get_cache_key(pdf_path)
+        cache_file = self.manager.get_paper_cache_path(paper_hash)
+        
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                if cache_data.get("version") == DEFAULT_CONFIG["CACHE_VERSION"]:
+                    return cache_data
+            except (json.JSONDecodeError, KeyError):
+                pass
+        return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
+    
+    def set_cache(self, pdf_path: str, cache_data: dict):
+        """Set cache data for a paper."""
+        paper_hash = self.get_cache_key(pdf_path)
+        cache_file = self.manager.get_paper_cache_path(paper_hash)
+        
+        cache_data["version"] = DEFAULT_CONFIG["CACHE_VERSION"]
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(cache_file, 'w') as f:
+                json.dump(cache_data, f, indent=4)
+        except Exception as e:
+            console.print(f"[yellow]Failed to save cache for {Path(pdf_path).name}: {e}[/yellow]")
+
 class ResearchSummaryManager(FileManager):
     """Manages the processing and storage of research summaries."""
     
     def __init__(self, output_dir: str = DEFAULT_CONFIG["OUTPUT_DIR"]):
         super().__init__(Path(output_dir))
         
-        # Create subdirectories
+        # Create subdirectories directly under output_dir
         self.subdirs = {
             "cache": self.base_dir / "cache",
             "summaries": self.base_dir / "summaries",
@@ -299,620 +424,748 @@ class ResearchSummaryManager(FileManager):
     
     def get_topic_path(self, topic_name: str) -> Path:
         """Get path for topic data with proper filename sanitization."""
-        # Replace any non-alphanumeric chars (except spaces) with underscores
         safe_name = re.sub(r'[^\w\s-]', '_', topic_name)
-        # Replace spaces with underscores and collapse multiple underscores
         safe_name = re.sub(r'[-\s]+', '_', safe_name)
-        # Remove leading/trailing underscores and convert to lowercase
         safe_name = safe_name.strip('_').lower()
-        # Ensure the filename isn't empty and add .json extension
         safe_name = safe_name or 'unnamed_topic'
-        safe_name = f"{safe_name}.json"
-        
-        return self.subdirs["topics"] / safe_name
+        return self.subdirs["topics"] / f"{safe_name}.json"
 
-# Add a new LLMInterface class to handle all LLM operations
-class LLMInterface:
-    """Handles all interactions with the language model."""
+# Processing Classes
+class LLMProcessor:
+    """Handles all LLM interactions with consistent error handling and caching."""
     
-    def __init__(self, llm):
+    def __init__(self, llm: ChatOpenAI, cache_manager: Optional[CacheManager] = None):
         self.llm = llm
+        self.cache = cache_manager
         self.prompts = {k: ChatPromptTemplate.from_template(v) for k, v in PROMPTS.items()}
     
-    def invoke_prompt(self, prompt_key: str, **kwargs) -> str:
-        """Invoke a predefined prompt with parameters."""
-        try:
-            prompt = self.prompts[prompt_key]
-            result = self.llm.invoke(prompt.format(**kwargs))
-            return result.content.strip()
-        except Exception as e:
-            print(f"[ERROR] Failed to invoke {prompt_key}: {e}")
-            return ""
-    
-    def normalize_name(self, name: str) -> str:
-        """Normalize an author name."""
-        return self.invoke_prompt("NAME_NORMALIZATION", name=name)
-    
-    def extract_authors(self, text: str) -> List[str]:
-        """Extract author names from text."""
-        result = self.invoke_prompt("AUTHOR_EXTRACTION", text=text[:2000])
-        return [name.strip() for name in result.split('\n') if name.strip()]
-    
-    def extract_title(self, text: str) -> str:
-        """Extract paper title from text."""
-        return self.invoke_prompt("TITLE_EXTRACTION", text=text[:2000]) or "Untitled"
+    def invoke_with_retry(
+        self,
+        prompt_key: str,
+        max_retries: int = 3,
+        **kwargs
+    ) -> str:
+        """Invoke LLM with retry logic and error handling."""
+        if prompt_key not in self.prompts:
+            logger.error(f"Prompt key '{prompt_key}' not found in available prompts: {list(self.prompts.keys())}")
+            raise KeyError(f"Invalid prompt key: {prompt_key}")
+            
+        for attempt in range(max_retries):
+            try:
+                prompt = self.prompts[prompt_key]
+                logger.debug(f"Attempting {prompt_key} (try {attempt + 1}/{max_retries})")
+                result = self.llm.invoke(prompt.format(**kwargs))
+                return result.content.strip()
+            except Exception as e:
+                logger.error(f"Error in attempt {attempt + 1} for {prompt_key}: {str(e)}")
+                logger.debug(f"Prompt args: {kwargs}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed all retries for {prompt_key}")
+                    logger.error(traceback.format_exc())
+                    raise
+                logger.warning(f"Retrying {prompt_key} ({attempt + 1}/{max_retries})")
 
+class DocumentProcessor:
+    """Handles document loading and text extraction."""
+    
+    @staticmethod
+    def load_pdf(pdf_path: str) -> Tuple[str, List[Document]]:
+        """Load PDF and extract text."""
+        loader = PyPDFLoader(pdf_path)
+        docs = loader.load_and_split()
+        text = "\n".join([doc.page_content for doc in docs]) if docs else ""
+        return text, docs
+    
+    @staticmethod
+    def extract_metadata(
+        text: str,
+        llm_processor: LLMProcessor
+    ) -> Tuple[str, List[str]]:
+        """Extract title and authors from text."""
+        title = llm_processor.invoke_with_retry("TITLE_EXTRACTION", text=text[:2000])
+        author_text = llm_processor.invoke_with_retry("AUTHOR_EXTRACTION", text=text[:2000])
+        return title, [name.strip() for name in author_text.split('\n') if name.strip()]
+
+class ParallelProcessor:
+    """Handles parallel processing with consistent error handling and progress tracking."""
+    
+    def __init__(self, max_workers: int = DEFAULT_CONFIG["MAX_WORKERS"], llm_processor: Optional[LLMProcessor] = None, cache_manager: Optional[CacheManager] = None):
+        self.max_workers = max_workers
+        self.llm_processor = llm_processor
+        self.cache_manager = cache_manager
+    
+    def process_items(
+        self,
+        items: List[Any],
+        process_fn: Callable,
+        status_msg: str,
+        error_msg: str,
+        status=None,
+        **kwargs
+    ) -> List[Any]:
+        """Process items in parallel with consistent error handling and progress tracking."""
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            if status:
+                status.update(f"[bold blue]{status_msg}[/bold blue]")
+            
+            # Submit all tasks
+            future_to_item = {
+                executor.submit(process_fn, item, **kwargs): item
+                for item in items
+            }
+            
+            # Process results as they complete
+            completed = 0
+            total = len(items)
+            for future in as_completed(future_to_item):
+                item = future_to_item[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    completed += 1
+                    if status:
+                        status.update(f"[dim]Completed {completed}/{total} items[/dim]")
+                except Exception as e:
+                    console.print(f"[red]{error_msg} {str(e)}[/red]")
+        
+        return results
+
+class SummaryGenerator:
+    """Handles generation of all types of summaries."""
+    
+    def __init__(self, llm_processor: LLMProcessor):
+        self.llm = llm_processor
+    
+    def create_paper_summary(
+        self,
+        paper: Paper,
+        cache_key: Optional[str] = None
+    ) -> PaperSummary:
+        """Create a complete paper summary."""
+        brief = self.llm.invoke_with_retry(
+            "BRIEF_SUMMARY",
+            summary=paper.summary
+        )
+        technical = self.llm.invoke_with_retry(
+            "PAPER_SUMMARY",
+            summary=paper.summary
+        )
+        return PaperSummary(
+            paper=paper,
+            brief_summary=brief,
+            technical_summary=technical,
+            weight=paper.weight
+        )
+    
+    def create_topic_summary(
+        self,
+        name: str,
+        papers: List[PaperSummary]
+    ) -> TopicSummary:
+        """Create a complete topic summary."""
+        papers_text = "\n\n".join([
+            f"Title: {p.paper.title}\nWeight: {p.weight:.1f}\nSummary: {p.technical_summary}"
+            for p in sorted(papers, key=lambda x: x.weight, reverse=True)
+        ])
+        
+        narrative = self.llm.invoke_with_retry(
+            "TOPIC_NARRATIVE",
+            context=papers_text
+        )
+        context = self.llm.invoke_with_retry(
+            "TOPIC_CONTEXT",
+            theme=name
+        )
+        
+        return TopicSummary(
+            name=name,
+            paper_summaries=papers,
+            flowing_narrative=narrative,
+            context_summary=context
+        )
+
+# Data Classes
 @dataclass
 class Author:
-    """Structured representation of an author."""
+    """Represents an author with normalized name handling."""
     full_name: str
     normalized_name: str
     role: str = 'contributing_author'
     
-    def matches(self, other_name: str, llm_interface: LLMInterface) -> bool:
-        """Compare this author with another name"""
-        other_normalized = normalize_author_name(other_name, llm_interface)
+    @classmethod
+    def create(cls, name: str, llm_processor: 'LLMProcessor') -> 'Author':
+        """Create an Author instance with normalized name."""
+        normalized = llm_processor.invoke_with_retry("NAME_NORMALIZATION", name=name)
+        return cls(full_name=name, normalized_name=normalized)
+    
+    def matches(self, other_name: str, llm_processor: 'LLMProcessor') -> bool:
+        """Check if this author matches another name."""
+        other_normalized = llm_processor.invoke_with_retry("NAME_NORMALIZATION", name=other_name)
         return (
             self.normalized_name.lower() == other_normalized.lower() or
             self.full_name.lower() == other_name.lower()
         )
 
-# Author handling prompts and functions
-def normalize_author_name(name: str, llm_interface: LLMInterface) -> str:
-    """Normalize an author name using LLM."""
-    if not llm_interface:
-        raise ValueError("LLM interface is required for name normalization")
-    return llm_interface.normalize_name(name)
-
-def extract_authors(text_or_dict, llm_interface: LLMInterface) -> List[str]:
-    """Extract author names from text or dictionary"""
-    if isinstance(text_or_dict, str):
-        try:
-            return llm_interface.extract_authors(text_or_dict)
-        except Exception:
-            return []
-            
-    elif isinstance(text_or_dict, dict):
-        if 'authors' in text_or_dict:
-            if isinstance(text_or_dict['authors'], list):
-                return text_or_dict['authors']
-            return extract_authors(text_or_dict['authors'], llm_interface)
-            
-        for key in ['author', 'full_name', 'name']:
-            if key in text_or_dict:
-                return extract_authors(text_or_dict[key], llm_interface)
-                
-        if 'original_text' in text_or_dict:
-            return extract_authors(text_or_dict['original_text'], llm_interface)
-    
-    return []
-
 @dataclass
 class Paper:
     """Represents a processed research paper."""
     file_path: str
+    title: str
+    authors: List[Author]
     summary: str
+    brief_summary: str
     weight: float
-    processed_time: str
     role: str
     original_text: str = ""
-    title: str = "Untitled"
-    authors: List[Author] = None  # Changed to List[Author]
+    processed_time: Optional[str] = None
     
-    def __post_init__(self):
-        if self.authors is None:
-            self.authors = []
-            
-    def get_author_names(self) -> List[str]:
-        """Get list of normalized author names"""
-        return [author.normalized_name for author in self.authors]
+    @classmethod
+    def from_cache(cls, cache_data: dict, pdf_file: str) -> 'Paper':
+        """Create Paper instance from cache data."""
+        authors = [
+            Author(
+                full_name=a["full_name"],
+                normalized_name=a["normalized_name"]
+            )
+            for a in cache_data.get("authors", [])
+        ]
+        return cls(
+            file_path=pdf_file,
+            title=cache_data.get("title", "Untitled"),
+            authors=authors,
+            summary=cache_data["summary"],
+            brief_summary=cache_data.get("brief_summary", ""),
+            weight=cache_data.get("weight", 0.1),
+            role=cache_data.get("role", "unknown"),
+            original_text=cache_data.get("original_text", ""),
+            processed_time=str(Path(pdf_file).stat().st_mtime)
+        )
     
-    def has_author(self, name: str) -> bool:
-        """Check if paper has a specific author"""
-        return any(author.matches(name) for author in self.authors)
+    @classmethod
+    def create(cls, pdf_file: str, **kwargs) -> 'Paper':
+        """Create new Paper instance with proper defaults."""
+        return cls(
+            file_path=pdf_file,
+            processed_time=str(Path(pdf_file).stat().st_mtime),
+            **kwargs
+        )
     
-    def get_author_role(self, name: str) -> str:
-        """Get role of specific author"""
-        for author in self.authors:
-            if author.matches(name):
-                return author.role
-        return "not_author"
+    def to_cache_dict(self) -> dict:
+        """Convert to cache format."""
+        return {
+            "title": self.title,
+            "authors": [
+                {
+                    "full_name": a.full_name,
+                    "normalized_name": a.normalized_name
+                }
+                for a in self.authors
+            ],
+            "summary": self.summary,
+            "brief_summary": self.brief_summary,
+            "weight": self.weight,
+            "role": self.role,
+            "original_text": self.original_text,
+            "version": DEFAULT_CONFIG["CACHE_VERSION"]
+        }
 
 @dataclass
-class Topic:
-    """Represents a group of related papers."""
-    name: str
-    papers: List[Paper]
-    summary: Optional[str] = None
-    paper_summaries: Dict[str, str] = None
-
-    def __post_init__(self):
-        if self.paper_summaries is None:
-            self.paper_summaries = {}
-
-def get_cache_key(pdf_path):
-    """Generate a cache key based on file path and last modified time."""
-    pdf_stats = os.stat(pdf_path)
-    content_key = f"{pdf_path}:{pdf_stats.st_mtime}"
-    return hashlib.md5(content_key.encode()).hexdigest()
-
-def load_cache_for_paper(paper_path: str, manager: ResearchSummaryManager) -> dict:
-    """Load cache for a specific paper."""
-    paper_hash = get_cache_key(paper_path)
-    cache_file = manager.get_paper_cache_path(paper_hash)
+class PaperSummary:
+    """Represents a paper's generated summaries."""
+    paper: Paper
+    brief_summary: str
+    technical_summary: str
+    weight: float
     
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r") as f:
-                cache_data = json.load(f)
-            if cache_data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
-                return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-            return cache_data
-        except (json.JSONDecodeError, KeyError) as e:
-            print(f"[CACHE] Error loading cache for {paper_path}: {e}")
-            return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-    return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-
-def save_cache_for_paper(paper_path: str, cache_data: dict, manager: ResearchSummaryManager):
-    """Save cache for a specific paper."""
-    paper_hash = get_cache_key(paper_path)
-    cache_file = manager.get_paper_cache_path(paper_hash)
-    
-    with open(cache_file, "w") as f:
-        json.dump(cache_data, f, indent=4)
-
-def save_paper_data(paper: Paper, manager: ResearchSummaryManager):
-    """Save processed paper data to individual file."""
-    paper_hash = get_cache_key(paper.file_path)
-    paper_file = manager.get_paper_path(paper_hash)
-    
-    paper_data = {
-        "file_path": paper.file_path,
-        "title": paper.title,
-        "authors": paper.authors,
-        "summary": paper.summary,
-        "weight": paper.weight,
-        "processed_time": paper.processed_time,
-        "role": paper.role
-    }
-    
-    with open(paper_file, "w") as f:
-        json.dump(paper_data, f, indent=4)
-
-def load_partial_results():
-    """Load partial results from disk with version checking."""
-    manager = ResearchSummaryManager()
-    partial_results_path = manager.paths["partial_results"]  # Use the path from paths dictionary
-    
-    if partial_results_path.exists():
-        try:
-            with open(partial_results_path, "r") as f:
-                data = json.load(f)
-            
-            if data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
-                print(f"[PARTIAL] Outdated version. Expected {DEFAULT_CONFIG['CACHE_VERSION']}, found {data.get('version')}. Rebuilding.")
-                return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
-            
-            return data["entries"]
-        except (json.JSONDecodeError, KeyError) as e:
-            print(f"[PARTIAL] Error loading partial results: {e}. Rebuilding.")
-            return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
-    return {"version": DEFAULT_CONFIG["CACHE_VERSION"], "entries": {}}
-
-def save_partial_results(results):
-    """Save partial results to disk with version information."""
-    manager = ResearchSummaryManager()
-    partial_results_path = manager.paths["partial_results"]  # Use the path from paths dictionary
-    
-    data = {
-        "version": DEFAULT_CONFIG["CACHE_VERSION"],
-        "entries": results
-    }
-    with open(partial_results_path, "w") as f:
-        json.dump(data, f, indent=4)
-
-def extract_title_with_cache(text: str, llm_interface: LLMInterface, cache_data: dict) -> str:
-    """Extract paper title from text using cache data."""
-    if cache_data and "title" in cache_data:
-        print(f"[CACHE] Using cached title")
-        return cache_data["title"]
-    
-    return llm_interface.extract_title(text)
-
-def generate_weighted_topic_summary(papers: List[Paper], llm_interface: LLMInterface, author_name: str, status=None) -> Tuple[str, Dict[str, str]]:
-    """Generate a flowing topic summary and paper summaries."""
-    console.print("\n[cyan]Generating topic summaries...[/cyan]")
-    
-    # Sort papers by weight in descending order
-    sorted_papers = sorted(papers, key=lambda x: x.weight, reverse=True)
-    
-    # Generate brief summaries for each paper
-    paper_summaries = {}
-    brief_summary_prompt = ChatPromptTemplate.from_template(PROMPTS["BRIEF_SUMMARY"])
-    
-    # Use the passed status instead of creating a new one
-    for i, paper in enumerate(sorted_papers, 1):
-        if status:
-            status.update(f"[dim]Generating brief summary {i}/{len(sorted_papers)}[/dim]")
-        brief_summary = llm_interface.llm.invoke(brief_summary_prompt.format(summary=paper.summary))
-        paper_summaries[paper.file_path] = brief_summary.content
-    
-    if status:
-        status.update("[bold blue]→ Generating flowing narrative...[/bold blue]")
-    else:
-        console.print("[bold blue]→ Generating flowing narrative...[/bold blue]")
-    
-    # Generate papers text for narrative
-    papers_text = "\n\n".join([
-        f"Title: {p.title}\nWeight: {p.weight:.1f}\nSummary: {paper_summaries[p.file_path]}"
-        for p in sorted_papers
-    ])
-    
-    narrative_prompt = ChatPromptTemplate.from_template(PROMPTS["TOPIC_NARRATIVE"])
-    
-    chain = create_stuff_documents_chain(
-        llm=llm_interface.llm,
-        prompt=narrative_prompt,
-        document_prompt=PromptTemplate.from_template("{page_content}"),
-        document_variable_name="context"
-    )
-    
-    doc = Document(page_content=papers_text)
-    flowing_summary = chain.invoke({"context": [doc]})
-    
-    console.print("[green]✓ Topic summary generated[/green]")
-    
-    return flowing_summary, paper_summaries
-
-def process_pdf(pdf_file: str, manager: ResearchSummaryManager, llm_interface: LLMInterface, author_name: str) -> Paper:
-    """Process a single PDF with improved organization."""
-    cache_data = load_cache_for_paper(pdf_file, manager)
-    
-    if "summary" in cache_data:
-        # Use cached data
-        filename = Path(pdf_file).name
-        if len(filename) > 40:
-            filename = filename[:37] + "..."
-        console.print(f"[dim]← Cached: {filename}[/dim]")
-        
-        # Convert cached author names to Author objects
-        author_names = extract_authors(cache_data, llm_interface)
-        authors = []
-        for name in author_names:
-            normalized = llm_interface.normalize_name(name)
-            # Create Author object without role first
-            authors.append(Author(full_name=name, normalized_name=normalized))
-        
-        # Determine role and weight after we have all authors
-        role, weight = determine_author_role_from_authors(authors, author_name, llm_interface)
-        
-        return Paper(
-            file_path=pdf_file,
-            summary=cache_data['summary'],
-            weight=weight,  # Use the determined weight
-            processed_time=str(Path(pdf_file).stat().st_mtime),
-            role=role,  # Use the determined role
-            original_text=cache_data.get('original_text', ''),
-            title=cache_data['title'],
-            authors=authors
-        )
-    
-    # Process new file
-    filename = Path(pdf_file).name
-    if len(filename) > 40:
-        filename = filename[:37] + "..."
-    console.print(f"[bold blue]→ Processing: {filename}[/bold blue]")
-    
-    loader = PyPDFLoader(pdf_file)
-    docs = loader.load_and_split()
-    
-    # Combine all pages into one text
-    original_text = "\n".join([doc.page_content for doc in docs]) if docs else ""
-    
-    # Extract and process authors
-    author_names = extract_authors(original_text, llm_interface)
-    authors = []
-    for name in author_names:
-        normalized = llm_interface.normalize_name(name)
-        # Create Author object without role first
-        authors.append(Author(full_name=name, normalized_name=normalized))
-    
-    # Determine role and weight after we have all authors
-    role, weight = determine_author_role_from_authors(authors, author_name, llm_interface)
-    
-    # Extract metadata using cache
-    title = extract_title_with_cache(original_text, llm_interface, {})
-    
-    # Generate summary
-    summary_prompt = PromptTemplate.from_template(PROMPTS["PAPER_EXTRACTION"])
-    chain = load_summarize_chain(llm_interface.llm, chain_type="stuff", prompt=summary_prompt)
-    summary = chain.invoke(docs)["output_text"]
-    
-    # Save cache and paper data
-    cache_data.update({
-        'summary': summary,
-        'weight': weight,
-        'role': role,
-        'title': title,
-        'authors': [{'full_name': a.full_name, 'normalized_name': a.normalized_name} for a in authors],
-        'original_text': original_text,
-        'version': DEFAULT_CONFIG["CACHE_VERSION"]
-    })
-    save_cache_for_paper(pdf_file, cache_data, manager)
-    
-    return Paper(
-        file_path=pdf_file,
-        summary=summary,
-        weight=weight,
-        processed_time=str(Path(pdf_file).stat().st_mtime),
-        role=role,
-        original_text=original_text,
-        title=title,
-        authors=authors
-    )
-
-def summarize_pdfs_from_folder(pdfs_folder: str, author_name: str, num_topics: int = 5, status=None) -> List[Topic]:
-    """Process PDFs and return a list of Topics."""
-    manager = ResearchSummaryManager()
-    llm_interface = LLMInterface(llm)
-    papers: List[Paper] = []
-    partial_results = load_partial_results()
-
-    pdf_files = glob.glob(pdfs_folder + "/*.pdf")
-    total_pdfs = len(pdf_files)
-    processed_count = 0
-    save_threshold = max(1, min(5, total_pdfs // 10))
-
-    console.print()
-    console.rule("[bold cyan]Processing PDFs", style="cyan")
-    console.print(f"[cyan]Found {total_pdfs} PDFs to process[/cyan]")
-    console.print()
-
-    with ThreadPoolExecutor(max_workers=DEFAULT_CONFIG["MAX_WORKERS"]) as executor:
-        futures = {
-            executor.submit(process_pdf, pdf_file, manager, llm_interface, author_name): pdf_file 
-            for pdf_file in pdf_files
+    def to_dict(self) -> dict:
+        """Convert to serializable format."""
+        return {
+            "file_path": self.paper.file_path,
+            "title": self.paper.title,
+            "brief_summary": self.brief_summary,
+            "technical_summary": self.technical_summary,
+            "weight": self.weight,
+            "authors": [
+                {
+                    "full_name": a.full_name,
+                    "normalized_name": a.normalized_name
+                }
+                for a in self.paper.authors
+            ]
         }
-        
-        for future in as_completed(futures):
-            pdf_file = futures[future]
-            try:
-                paper = future.result()
-                papers.append(paper)
 
-                processed_count += 1
-                if processed_count % save_threshold == 0:
-                    save_partial_results(partial_results)
-                    if status:
-                        status.update(f"[bold green]Progress: {processed_count}/{total_pdfs} PDFs")
-
-            except Exception as e:
-                console.print(f"[red]Error processing {Path(pdf_file).name}:[/red]")
-                console.print(f"[red dim]{str(e)}[/red dim]")
-
-    console.print()
-    # Save final partial results
-    if partial_results:
-        save_partial_results(partial_results)
-
-    if not papers:
-        raise ValueError("No summaries were generated. Check the error messages above.")
-
-    if status:
-        status.update("[bold green]Grouping papers into topics...")
-
-    # Group papers by topic using llm_interface
-    topic_groups = group_papers_by_topic(papers, llm_interface, num_topics=num_topics)
+@dataclass
+class TopicSummary:
+    """Represents a group of related papers with generated summaries."""
+    name: str
+    paper_summaries: List[PaperSummary]
+    flowing_narrative: str
+    context_summary: Optional[str] = None
     
-    # Generate summaries for each topic
-    topics = []
-    for topic_name, topic_papers in topic_groups.items():
-        topic_summary, paper_summaries = generate_weighted_topic_summary(
-            topic_papers, llm_interface, author_name, status=status
+    def to_dict(self) -> dict:
+        """Convert to serializable format."""
+        return {
+            "name": self.name,
+            "flowing_narrative": self.flowing_narrative,
+            "context_summary": self.context_summary,
+            "paper_summaries": [ps.to_dict() for ps in self.paper_summaries]
+        }
+
+# Processing Functions
+def process_pdf(
+    pdf_file: str,
+    llm_processor: LLMProcessor,
+    cache_manager: CacheManager,
+    status_display: Optional[StatusDisplay] = None
+) -> Paper:
+    """Process a single PDF file and return a Paper object."""
+    logger.info(f"Starting processing of {pdf_file}")
+    
+    try:
+        if cache_manager.is_cached(pdf_file):
+            logger.info(f"Using cached data for {pdf_file}")
+            cache_data = cache_manager.get_cache(pdf_file)
+            return Paper.from_cache(cache_data, pdf_file)
+
+        # Extract text from PDF
+        logger.info(f"Extracting text from {pdf_file}")
+        text = extract_text_from_pdf(pdf_file)
+        if not text.strip():
+            logger.error(f"No text extracted from {pdf_file}")
+            raise ValueError(f"No text could be extracted from {pdf_file}")
+        
+        logger.info(f"Text extracted successfully from {pdf_file} ({len(text)} chars)")
+
+        # Extract metadata using LLM
+        logger.info(f"Extracting metadata for {pdf_file}")
+        
+        title = llm_processor.invoke_with_retry("TITLE_EXTRACTION", text=text[:2000])
+        logger.debug(f"Extracted title: {title}")
+        
+        author_text = llm_processor.invoke_with_retry("AUTHOR_EXTRACTION", text=text[:2000])
+        logger.debug(f"Extracted authors: {author_text}")
+        
+        # Generate both summaries at once
+        technical_summary = llm_processor.invoke_with_retry("TECHNICAL_SUMMARY", text=text)
+        brief_summary = llm_processor.invoke_with_retry("BRIEF_SUMMARY", text=text)
+        
+        logger.debug(f"Generated technical summary length: {len(technical_summary)}")
+        logger.debug(f"Generated brief summary length: {len(brief_summary)}")
+
+        # Create paper object
+        paper = Paper.create(
+            pdf_file=pdf_file,
+            title=title or "Untitled",
+            authors=[Author.create(name.strip(), llm_processor) 
+                    for name in author_text.split('\n') if name.strip()],
+            summary=technical_summary,
+            brief_summary=brief_summary,
+            weight=0.5,
+            role="unknown",
+            original_text=text
         )
         
-        topic = Topic(
-            name=topic_name,
-            papers=topic_papers,
-            summary=topic_summary,
-            paper_summaries=paper_summaries
-        )
-        topics.append(topic)
+        logger.info(f"Successfully processed {pdf_file}")
         
-        # Save topic data
-        topic_path = manager.get_topic_path(topic_name)
-        manager.save_json(topic_path, {
-            "name": topic_name,
-            "summary": topic_summary,
-            "paper_summaries": paper_summaries,
-            "papers": [paper.file_path for paper in topic_papers]
-        })
-    
-    return topics
-
-def generate_narrative(topics: List[Topic], llm) -> str:
-    """Generate a cohesive narrative connecting research themes and contributions."""
-    console.print("\n[cyan]Generating final research narrative...[/cyan]")
-    
-    theme_titles = [topic.name for topic in topics]
-    
-    # 1. Technical Overview
-    console.print("[bold blue]→ Creating technical overview...[/bold blue]")
-    overview_prompt = ChatPromptTemplate.from_template(PROMPTS["TECHNICAL_OVERVIEW"])
-    overview = llm.invoke(overview_prompt.format(themes=", ".join(theme_titles)))
-    narrative = f"{overview.content}\n\n"
-
-    # 2. Detailed Topic Discussions
-    console.print("[bold blue]→ Adding detailed topic discussions...[/bold blue]")
-    for i, topic in enumerate(topics, 1):
-        console.print(f"[dim]  Processing topic {i}/{len(topics)}: {topic.name}[/dim]")
-        narrative += f"### {topic.name}\n\n"
+        # Cache results
+        cache_manager.set_cache(pdf_file, paper.to_cache_dict())
+        logger.info(f"Cached results for {pdf_file}")
         
-        # Add context sentence
-        context_prompt = ChatPromptTemplate.from_template(PROMPTS["TOPIC_CONTEXT"])
-        context = llm.invoke(context_prompt.format(theme=topic.name))
-        narrative += f"{context.content}\n\n"
+        return paper
         
-        # Use the existing detailed topic summary
-        narrative += f"{topic.summary}\n\n"
+    except Exception as e:
+        logger.error(f"Error processing {pdf_file}: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
 
-    # 3. Future Directions
-    console.print("[bold blue]→ Adding future directions...[/bold blue]")
-    conclusion_prompt = ChatPromptTemplate.from_template(PROMPTS["FUTURE_DIRECTIONS"])
-    conclusion = llm.invoke(conclusion_prompt.format(themes=", ".join(theme_titles)))
-    narrative += f"\n{conclusion.content}"
-
-    console.print("[green]✓ Research narrative generated[/green]")
-    return narrative
-
-def validate_author_name(name: str) -> Tuple[bool, str]:
-    """
-    Validate an author name and return if it's valid and any warning message.
+def process_papers_in_parallel(
+    pdf_files: List[str],
+    parallel_processor: ParallelProcessor,
+    status_display: Optional[StatusDisplay] = None
+) -> List[Paper]:
+    """Process multiple PDFs in parallel."""
+    if status_display:
+        status_display.update(f"Processing {len(pdf_files)} papers in parallel")
     
-    Returns:
-        Tuple of (is_valid: bool, warning_message: str)
-    """
-    parts = name.split()
+    def process_single(pdf_file: str) -> Paper:
+        try:
+            return process_pdf(
+                pdf_file,
+                parallel_processor.llm_processor,
+                parallel_processor.cache_manager,
+                None  # Avoid nested status displays
+            )
+        except Exception as e:
+            print(f"Error processing {pdf_file}: {str(e)}")
+            return None
     
-    # Must have at least two parts (first and last name)
-    if len(parts) < 2:
-        return False, f"Single word name: '{name}'"
-        
-    # Check for common error patterns
-    error_patterns = [
-        r'^\d',  # Numbers at start of name
-        r'(?i)^(dr|prof|mr|ms|mrs|md|phd|university|institute|hospital|center|dept|department)\b',  # Titles or institutions
-        r'(?i)@|\.com|\.edu',  # Email-like patterns
+    papers = parallel_processor.process_items(
+        items=pdf_files,
+        process_fn=process_single,
+        status_msg="Processing PDF files",
+        error_msg="Failed to process PDF file:",
+        status=status_display
+    )
+    return [p for p in papers if p is not None]
+
+def generate_paper_summary(
+    paper: Paper,
+    llm_processor: LLMProcessor,
+    status_display: Optional[StatusDisplay] = None
+) -> PaperSummary:
+    """Generate detailed summaries for a paper."""
+    if status_display:
+        status_display.update(f"Generating summaries for {paper.title}")
+    
+    # Generate brief and technical summaries without truncation
+    brief_summary = llm_processor.invoke_with_retry(
+        "BRIEF_SUMMARY",
+        text=paper.original_text
+    )
+    
+    technical_summary = llm_processor.invoke_with_retry(
+        "TECHNICAL_SUMMARY",
+        text=paper.original_text
+    )
+    
+    return PaperSummary(
+        paper=paper,
+        brief_summary=brief_summary,
+        technical_summary=technical_summary,
+        weight=paper.weight
+    )
+
+def create_topic_summary(
+    name: str,
+    paper_summaries: List[PaperSummary],
+    llm_processor: LLMProcessor,
+    status_display: Optional[StatusDisplay] = None
+) -> TopicSummary:
+    """Create a topic summary from a list of paper summaries."""
+    if status_display:
+        status_display.update(f"Creating topic summary for {name}")
+    
+    # Sort papers by weight
+    sorted_summaries = sorted(
+        paper_summaries,
+        key=lambda x: x.weight,
+        reverse=True
+    )
+    
+    # Generate flowing narrative
+    summaries_context = [
+        {
+            "title": ps.paper.title,
+            "brief_summary": ps.brief_summary,
+            "technical_summary": ps.technical_summary,
+            "weight": ps.weight
+        }
+        for ps in sorted_summaries
     ]
     
-    for pattern in error_patterns:
-        if any(re.search(pattern, part) for part in parts):
-            return False, f"Contains invalid patterns: '{name}'"
+    flowing_narrative = llm_processor.invoke_with_retry(
+        "TOPIC_NARRATIVE",
+        context=summaries_context
+    )
     
-    # Allow names with middle initials (e.g., "John A. Smith" or "John A Smith")
-    # First and last name should be longer than 1 character
-    if len(parts[0]) <= 1 or len(parts[-1]) <= 1:
-        return False, f"First or last name too short: '{name}'"
-    
-    return True, ""
-
-def run_pdf_summarization(config: dict = None):
-    """Main function with improved organization."""
-    cfg = DEFAULT_CONFIG.copy()
-    if config:
-        cfg.update(config)
-    
-    # Initialize core components
-    manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
-    
-    console.print(f"[cyan]Starting PDF summarization from: {cfg['PDF_FOLDER']}[/cyan]")
-    console.print(f"[cyan]Analyzing contributions for: {cfg['AUTHOR_NAME']}[/cyan]")
-    
-    with console.status("[bold green]Processing...") as status:
-        topics = summarize_pdfs_from_folder(
-            pdfs_folder=cfg["PDF_FOLDER"],
-            author_name=cfg["AUTHOR_NAME"],
-            num_topics=cfg["NUM_TOPICS"],
-            status=status
+    # Generate context summary if needed
+    context_summary = None
+    if len(paper_summaries) > 1:
+        context_summary = llm_processor.invoke_with_retry(
+            "TOPIC_CONTEXT",
+            theme=name
         )
-        
-        status.update("[bold green]Generating final narrative...")
-        llm_interface = LLMInterface(llm)
-        narrative = generate_narrative(topics, llm_interface.llm)
-        
-        # Save narrative using manager
-        with open(manager.paths["narrative"], "w") as f:
-            f.write(narrative)
     
-    console.print("[bold green]✓[/bold green] Processing complete!")
-    return topics, narrative
+    return TopicSummary(
+        name=name,
+        paper_summaries=sorted_summaries,
+        flowing_narrative=flowing_narrative,
+        context_summary=context_summary
+    )
 
-def group_papers_by_topic(papers: List[Paper], llm_interface: LLMInterface, num_topics: int = 5) -> Dict[str, List[Paper]]:
-    """Group papers into topics using LLM-based classification."""
-    console.print("\n[cyan]Grouping papers into topics...[/cyan]")
+def extract_text_from_pdf(pdf_file: str) -> str:
+    """Extract text from a PDF file."""
+    try:
+        loader = PyPDFLoader(pdf_file)
+        pages = loader.load()
+        text = "\n".join(page.page_content for page in pages)
+        return text
+    except Exception as e:
+        raise ValueError(f"Failed to extract text from PDF: {str(e)}")
+
+def group_papers_by_topic(
+    papers: List[Paper],
+    llm_processor: LLMProcessor,
+    num_topics: int = 5,
+    status_display: Optional[StatusDisplay] = None
+) -> Dict[str, List[Paper]]:
+    """Group papers into topics using LLM-based clustering."""
+    if status_display:
+        status_display.update("Grouping papers into topics")
     
-    # Calculate target papers per topic
+    # Calculate target distribution
     total_papers = len(papers)
     target_per_topic = total_papers / num_topics
     min_papers = max(1, int(target_per_topic * 0.7))
     max_papers = int(target_per_topic * 1.3)
     
-    console.print(f"[dim]Target distribution: {min_papers}-{max_papers} papers per topic[/dim]")
+    if status_display:
+        status_display.update(f"Target: {min_papers}-{max_papers} papers per topic")
     
-    # Build the list of papers with their summaries and weights
-    console.print("[dim]Preparing paper summaries for clustering...[/dim]")
-    paper_list = ""
+    # Prepare paper summaries for clustering
+    paper_list = []
     for idx, paper in enumerate(papers):
-        paper_list += f"\nPaper {idx}:\nWeight: {paper.weight:.1f}\nSummary: {paper.summary}\n"
-
-    console.print("[bold blue]→ Requesting topic clustering from LLM...[/bold blue]")
+        paper_list.append({
+            "index": idx,
+            "weight": paper.weight,
+            "summary": paper.summary,
+            "title": paper.title
+        })
     
-    # Format the clustering prompt with the distribution requirements
-    clustering_prompt = ChatPromptTemplate.from_template(PROMPTS["CLUSTERING"]).format(
+    # Get clustering from LLM and parse JSON response
+    clustering_result = llm_processor.invoke_with_retry(
+        "TOPIC_CLUSTERING",
+        papers=paper_list,
         num_topics=num_topics,
         min_papers=min_papers,
         max_papers=max_papers,
         target_per_topic=target_per_topic
     )
     
-    full_prompt = clustering_prompt + paper_list + "\nResponse (in JSON format):"
-
-    # Get the clustering result from the LLM
-    clustering_result = llm_interface.llm.invoke(full_prompt).content.strip()
-    
+    # Parse the JSON string into a dictionary, handling potential backticks
     try:
-        json_match = re.search(r'\{.*\}', clustering_result, re.DOTALL)
-        if json_match:
-            clustering_result = json_match.group(0)
-        
-        topic_groups_indices = json.loads(clustering_result)
-        
-        # Validate distribution
-        for topic, indices in topic_groups_indices.items():
-            if len(indices) < min_papers or len(indices) > max_papers:
-                print(f"[yellow]Warning: Topic '{topic}' has {len(indices)} papers, outside target range of {min_papers}-{max_papers}[/yellow]")
-        
-    except (json.JSONDecodeError, AttributeError) as e:
-        print(f"[ERROR] Failed to parse clustering result: {e}")
-        print(f"[DEBUG] Raw clustering result:\n{clustering_result}")
-        topic_groups_indices = {"uncategorized_papers": list(range(len(papers)))}
-
-    # Build the final topic groups
-    topic_groups = {}
-    for topic, indices in topic_groups_indices.items():
-        topic_groups[topic] = [papers[int(idx)] for idx in indices]
-
-    console.print(f"[green]✓ Created {len(topic_groups)} topic groups[/green]")
-    for topic, papers_list in topic_groups.items():
-        console.print(f"[dim]  • {topic}: {len(papers_list)} papers[/dim]")
+        # Remove any backticks and 'json' tag that might be present
+        cleaned_json = clustering_result.replace('```json', '').replace('```', '').strip()
+        clustering_dict = json.loads(cleaned_json)
+    except json.JSONDecodeError as e:
+        if status_display:
+            status_display.error(f"Failed to parse clustering result: {e}")
+            status_display.error(f"Raw result: {clustering_result}")
+        # Fallback: put all papers in one topic
+        clustering_dict = {"Default Topic": list(range(len(papers)))}
     
-    return topic_groups
+    # Build topic groups
+    topic_groups = defaultdict(list)
+    for topic_name, indices in clustering_dict.items():
+        for idx in indices:
+            if 0 <= int(idx) < len(papers):  # Add bounds check
+                topic_groups[topic_name].append(papers[int(idx)])
+    
+    if status_display:
+        for topic, group in topic_groups.items():
+            status_display.update(f"Topic '{topic}': {len(group)} papers")
+    
+    return dict(topic_groups)
 
-def determine_author_role_from_authors(authors: List[Author], target_name: str, llm_interface: LLMInterface) -> Tuple[str, float]:
-    """Determine role and weight based on author position."""
-    if not authors:
-        return "unknown", 0.1
+def generate_narrative(
+    topic_summaries: List[TopicSummary],
+    llm_processor: LLMProcessor,
+    status_display: Optional[StatusDisplay] = None
+) -> str:
+    """Generate a cohesive narrative connecting research themes."""
+    if status_display:
+        status_display.update("Generating final research narrative")
     
-    # Get normalized names for comparison
-    normalized_names = [author.normalized_name for author in authors]
-    normalized_target = llm_interface.normalize_name(target_name)
+    # Get topic names
+    theme_titles = [topic.name for topic in topic_summaries]
     
-    # First or last author gets highest weight
-    if normalized_names[0] == normalized_target:
-        return "first_author", 1.0
-    elif normalized_names[-1] == normalized_target:
-        return "last_author", 1.0
-    elif normalized_target in normalized_names:
-        return "middle_author", 0.3
-    return "other", 0.1
+    # Generate technical overview
+    if status_display:
+        status_display.update("Creating technical overview")
+    overview = llm_processor.invoke_with_retry(
+        "TECHNICAL_OVERVIEW",
+        themes=theme_titles
+    )
+    narrative = f"{overview}\n\n"
+    
+    # Add detailed topic discussions
+    if status_display:
+        status_display.update("Adding detailed topic discussions")
+    
+    for topic in topic_summaries:
+        narrative += f"### {topic.name}\n\n"
+        if topic.context_summary:
+            narrative += f"{topic.context_summary}\n\n"
+        narrative += f"{topic.flowing_narrative}\n\n"
+    
+    # Add future directions
+    if status_display:
+        status_display.update("Adding future directions")
+    conclusion = llm_processor.invoke_with_retry(
+        "FUTURE_DIRECTIONS",
+        themes=theme_titles
+    )
+    narrative += f"\n{conclusion}"
+    
+    return narrative
+
+def validate_author_name(name: str) -> Tuple[bool, str]:
+    """Validate author name and return validation status with message."""
+    parts = name.split()
+    
+    # Must have at least first and last name
+    if len(parts) < 2:
+        return False, f"Name must include first and last name: '{name}'"
+    
+    # Check for invalid patterns
+    error_patterns = [
+        (r'^\d', "Name starts with number"),
+        (r'(?i)^(dr|prof|mr|ms|mrs|md|phd|university|institute)\b', "Starts with title"),
+        (r'(?i)@|\.com|\.edu', "Contains email-like pattern"),
+        (r'[<>{}[\]\\|;]', "Contains invalid characters")
+    ]
+    
+    for pattern, message in error_patterns:
+        if any(re.search(pattern, part) for part in parts):
+            return False, f"{message}: '{name}'"
+    
+    # Check name part lengths
+    if len(parts[0]) <= 1 or len(parts[-1]) <= 1:
+        return False, f"First or last name too short: '{name}'"
+    
+    return True, ""
+
+def run_pdf_summarization(
+    config: Optional[dict] = None,
+    status_display: Optional[StatusDisplay] = None
+) -> Tuple[List[TopicSummary], str]:
+    """Main function to run the PDF summarization pipeline."""
+    # Load configuration
+    cfg = DEFAULT_CONFIG.copy()
+    if config:
+        cfg.update(config)
+    
+    if status_display:
+        status_display.update(f"Starting PDF summarization from: {cfg['PDF_FOLDER']}")
+        status_display.update(f"Analyzing contributions for: {cfg['AUTHOR_NAME']}")
+    
+    # Initialize components
+    manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
+    llm_processor = LLMProcessor(llm=llm)
+    cache_manager = CacheManager(manager)
+    parallel_processor = ParallelProcessor(
+        max_workers=cfg["MAX_WORKERS"],
+        llm_processor=llm_processor,
+        cache_manager=cache_manager
+    )
+    
+    # Get PDF files
+    pdf_files = glob.glob(os.path.join(cfg["PDF_FOLDER"], "*.pdf"))
+    if not pdf_files:
+        raise ValueError(f"No PDF files found in {cfg['PDF_FOLDER']}")
+    
+    # Process papers in parallel
+    papers = process_papers_in_parallel(
+        pdf_files=pdf_files,
+        parallel_processor=parallel_processor,
+        status_display=status_display
+    )
+    
+    # Convert papers to paper summaries directly using existing summaries
+    paper_summaries = []
+    for paper in papers:
+        paper_summaries.append(PaperSummary(
+            paper=paper,
+            brief_summary=paper.brief_summary,  # These should be added to Paper class
+            technical_summary=paper.summary,
+            weight=paper.weight
+        ))
+    
+    # Group papers by topic
+    topic_groups = group_papers_by_topic(
+        papers=papers,
+        llm_processor=llm_processor,
+        num_topics=cfg["NUM_TOPICS"],
+        status_display=status_display
+    )
+    
+    # Create topic summaries
+    topic_summaries = []
+    for topic_name, topic_papers in topic_groups.items():
+        topic_summaries.append(
+            create_topic_summary(
+                name=topic_name,
+                paper_summaries=[
+                    ps for ps in paper_summaries
+                    if ps.paper in topic_papers
+                ],
+                llm_processor=llm_processor,
+                status_display=status_display
+            )
+        )
+    
+    # Generate narrative
+    narrative = generate_narrative(
+        topic_summaries=topic_summaries,
+        llm_processor=llm_processor,
+        status_display=status_display
+    )
+    
+    # Save results
+    for topic in topic_summaries:
+        topic_path = manager.get_topic_path(topic.name)
+        manager.save_json(topic_path, topic.to_dict())
+    
+    with open(manager.paths["narrative"], "w") as f:
+        f.write(narrative)
+    
+    if status_display:
+        status_display.update("Processing complete!")
+    
+    return topic_summaries, narrative
+
+class StatusDisplay:
+    """Handles progress display and status updates."""
+    
+    def __init__(self):
+        self.console = Console()
+    
+    def update(self, message: str):
+        """Display a status update message."""
+        self.console.print(f"[dim]{message}[/dim]")
+    
+    def error(self, message: str):
+        """Display an error message."""
+        self.console.print(f"[red]Error: {message}[/red]")
+    
+    def success(self, message: str):
+        """Display a success message."""
+        self.console.print(f"[green]{message}[/green]")
+
+# After the imports, add logging configuration
+def setup_logging():
+    """Configure logging with timestamps and levels"""
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.FileHandler('pdf_summarizer.log'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 if __name__ == "__main__":
-    # Load environment variables
-    load_dotenv()
-    
-    # Check for API key
-    if not os.getenv("OPENAI_API_KEY"):
-        raise ValueError("Please set the OPENAI_API_KEY environment variable in .env file")
-    
-    # Run with default config
-    topics, narrative = run_pdf_summarization()
+    try:
+        logger.info("Starting PDF summarization process")
+        load_dotenv()
+        
+        if not os.getenv("OPENAI_API_KEY"):
+            logger.error("OPENAI_API_KEY environment variable not set")
+            raise ValueError("Please set the OPENAI_API_KEY environment variable")
+        
+        status_display = StatusDisplay()
+        
+        # Run with default config
+        topics, narrative = run_pdf_summarization(status_display=status_display)
+        logger.info("Processing completed successfully!")
+        
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise
