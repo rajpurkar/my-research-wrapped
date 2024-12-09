@@ -4,93 +4,126 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-Ever wondered what your research story would look like if it got the Spotify Wrapped treatment? MyResearchWrapped is your personal academic year-in-review generator, turning your papers into beautiful, shareable insights about your research in 2024.
+Ever wondered what your research story would look like if it got the Spotify Wrapped treatment? MyResearchWrapped is your personal academic year-in-review generator, turning your papers into beautiful, shareable insights about your research.
 
-## Your Research Story, Beautifully Told
+## Generate Your Research Wrapped in 3 Steps
 
-Traditional academic summaries can be dry and one-dimensional. My Research Wrapped changes that by transforming your publications into an engaging, visual story that reveals:
-
-- Your top research areas and their evolution over time 🚀
-- Hidden connections between your different papers 🔄
-- The impact and reach of your work 📊
-- Your unique "research personality" based on your methodological preferences 🎨
-
-Perfect for:
-- Sharing your year's achievements on social media
-- Adding flair to your tenure package
-- Understanding your research evolution
-- Discovering surprising patterns in your work
-
-## Get Your Wrapped
-
+### 1. Set Up the Project
 ```bash
-# Clone and set up
-git clone https://github.com/pranavrajpurkar/research-wrapped.git
-cd research-wrapped
+# Clone and install dependencies
+git clone https://github.com/rajpurkar/my-research-wrapped.git
+cd my-research-wrapped
+
+# Set up Python environment
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Set up your personalization
+# Install frontend dependencies
+cd frontend
+npm install
+cd ..
+```
+
+### 2. Add Your Papers
+Place your research papers in the `pdfs/` directory:
+```
+pdfs/
+├── paper1.pdf
+├── paper2.pdf
+└── paper3.pdf
+```
+
+### 3. Configure and Generate
+```bash
+# Copy and edit configuration
 cp .env.example .env
 # Add your OpenAI API key to .env
 
-# Run the analysis
+# Edit config.py with your details
 python main.py
+
+# Start the web server
+cd frontend
+npm run dev
 ```
+
+Visit `http://localhost:5173` to see your Research Wrapped! 🎉
+
+### Deploy to GitHub Pages
+
+The project automatically deploys to GitHub Pages when you push to the main branch. To set this up:
+
+1. Fork this repository
+2. Enable GitHub Pages in your repository settings:
+   - Go to Settings > Pages
+   - Set the source to "GitHub Actions"
+3. Push your changes to the main branch
+4. Your site will be available at `https://[username].github.io/my-research-wrapped`
+
+To use a custom domain:
+1. Add your domain to the `cname` field in `.github/workflows/deploy.yml`
+2. Configure your DNS settings as per [GitHub's documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
 
 ## How It Works
 
 MyResearchWrapped processes your research papers in three main stages:
 
-1. **Analysis**: Each paper is processed using advanced language models to extract key information, normalize author names, and identify core contributions.
+1. **Analysis**: Uses GPT-4 to extract key information from your papers, including summaries and contributions.
 
-2. **Synthesis**: Papers are grouped into research themes using semantic similarity and topic modeling, ensuring each area represents a coherent line of work.
+2. **Synthesis**: Groups papers into research themes using semantic clustering, with each area representing a coherent line of work.
 
-3. **Narrative**: The tool generates a flowing narrative that connects your research areas, highlighting methodological advances and impact.
+3. **Visualization**: Generates an interactive webpage to showcase your research story.
 
 ## Configuration
 
-MyResearchWrapped is highly configurable through `config.py`. Here are the key settings:
+### Environment Variables (.env)
+```
+OPENAI_API_KEY=your-api-key-here  # Required: Your OpenAI API key
+```
 
+### Basic Configuration (config.py)
 ```python
 DEFAULT_CONFIG = {
-    "AUTHOR_NAME": "Your Name",     # Target author for analysis
-    "NUM_TOPICS": 5,                # Number of research areas to identify
-    "MAX_WORKERS": 16,              # Parallel processing threads
+    # User settings
+    "AUTHOR_NAME": "Your Name",  # The name of the author whose papers to focus on
+    
+    # Model settings
+    "MODEL_NAME": "gpt-4o-mini",  # The OpenAI model to use
+    "MODEL_TEMPERATURE": 0.1,  # Temperature for model responses
+    
+    # Directory settings
+    "PDF_FOLDER": "pdfs",  # Directory containing PDF files to process
+    "OUTPUT_DIR": "outputs",  # Directory for all outputs
+    
+    # Processing settings
+    "NUM_TOPICS": 6,  # Number of research topics to cluster papers into
+    "MAX_WORKERS": 16,  # Maximum number of parallel workers
+    
+    # Summary length settings (in sentences)
+    "PAPER_SUMMARY_SENTENCES": 3,  # Target number of sentences for individual paper summaries
+    "TOPIC_SUMMARY_SENTENCES": 5,  # Target number of sentences for topic summaries
+    "NARRATIVE_SENTENCES": 5,  # Target number of sentences for the narrative
 }
 ```
 
-## Output Structure
-
-The tool generates a comprehensive analysis in the `outputs` directory:
-
-```
-outputs/
-├── papers/                 # Individual paper analyses
-├── topics/                # Research area summaries
-├── research_summary.csv   # Tabulated overview
-└── year_in_review.txt     # Narrative synthesis
-```
-
-## Advanced Features
-
-### Smart Author Detection
-MyResearchWrapped uses AI to handle the complexities of author names, accounting for variations in formatting, special characters, and academic titles. This ensures consistent author tracking across your publications.
-
-### Topic Analysis
-The semantic clustering algorithm identifies research themes while maintaining balance - ensuring each area has enough papers to be meaningful, but not so many that distinct contributions are lost.
-
-### Performance Optimization
-The tool includes smart caching and parallel processing, making it efficient even with large paper collections. Changes to individual papers trigger selective reprocessing, saving time on subsequent runs.
-
 ## Troubleshooting
 
-If you encounter issues:
+Common issues and solutions:
 
-1. **API Access**: Verify your OpenAI API key is correctly set in `.env`
-2. **PDF Processing**: Ensure your PDFs are text-searchable
-3. **Performance**: Adjust `MAX_WORKERS` in config.py if needed
+1. **Papers aren't being detected**
+   - Ensure PDFs are in the `pdfs/` directory
+   - Check that your name in config.py matches your papers
+   - Verify PDFs are text-searchable (not scanned images)
+
+2. **API Access Issues**
+   - Verify your OpenAI API key in .env
+   - Check your API quota and billing status
+
+3. **Webpage isn't loading**
+   - Ensure all npm dependencies are installed
+   - Check the console for JavaScript errors
+   - Verify the outputs/narrative.json file exists
 
 ## Contributing
 
@@ -110,4 +143,4 @@ Copyright (c) 2024 Pranav Rajpurkar. This project is [MIT](./LICENSE) licensed.
 MyResearchWrapped builds on these excellent open-source projects:
 - [LangChain](https://github.com/hwchase17/langchain) for AI orchestration
 - [OpenAI](https://github.com/openai/openai-python) for language models
-- [Rich](https://github.com/Textualize/rich) for beautiful terminal output
+- [React](https://reactjs.org/) for the web interface
