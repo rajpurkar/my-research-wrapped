@@ -1,5 +1,5 @@
 """
-ResearchRadar - Configuration Settings
+MyResearchWrapped - Configuration Settings
 An AI-powered research analysis tool.
 
 Copyright (c) 2024 Pranav Rajpurkar. MIT License.
