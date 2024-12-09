@@ -36,7 +36,7 @@ cp .env.example .env
 # Add your OpenAI API key to .env
 
 # Run the analysis
-python research_radar.py
+python main.py
 ```
 
 ## How It Works
