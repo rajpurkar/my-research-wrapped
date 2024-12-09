@@ -113,7 +113,7 @@ function App() {
   }
 
   return (
-    <div className="app-container">
+    <>
       <Helmet>
         <title>Research Year Wrapped 2024 | {narrative?.author || 'Loading...'}</title>
         <meta name="description" content="An interactive visualization of research contributions and impact throughout the year." />
@@ -124,106 +124,108 @@ function App() {
         <meta property="og:type" content="website" />
       </Helmet>
 
-      <header className="app-header">
-        <div className="header-content">
-          <h1>ResearchYearWrapped 🎁</h1>
-          <div className="header-meta">
-            <span className="year-tag">2024</span>
-            <iframe
-              src="https://ghbtns.com/github-btn.html?user=rajpurkar&repo=my-research-wrapped&type=star&count=true"
-              frameBorder="0"
-              scrolling="0"
-              width="150"
-              height="20"
-              title="GitHub Stars"
-              style={{ marginLeft: '16px' }}
-            />
+      <div className="app-container">
+        <header className="app-header">
+          <div className="header-content">
+            <h1>ResearchYearWrapped 🎁</h1>
+            <div className="header-meta">
+              <span className="year-tag">2024</span>
+              <iframe
+                src="https://ghbtns.com/github-btn.html?user=rajpurkar&repo=my-research-wrapped&type=star&count=true"
+                frameBorder="0"
+                scrolling="0"
+                width="150"
+                height="20"
+                title="GitHub Stars"
+                style={{ marginLeft: '16px' }}
+              />
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="main-content">
-        {/* Hero Section */}
-        <section className="hero-section">
-          <div className="stars-container">
-            {generateStars()}
-            {generateSparkles()}
-          </div>
-          <div className="hero-content">
-            <h1>My Research Wrapped 2024</h1>
-            <h2 className="author-name">by {narrative.author}</h2>
+        <main className="main-content">
+          {/* Hero Section */}
+          <section className="hero-section">
+            <div className="stars-container">
+              {generateStars()}
+              {generateSparkles()}
+            </div>
+            <div className="hero-content">
+              <h1>My Research Wrapped 2024</h1>
+              <h2 className="author-name">by {narrative.author}</h2>
+              
+              {/* Topics Grid */}
+              <div className="topics-highlight">
+                {narrative.topics.map((topic, index) => (
+                  <button
+                    key={index}
+                    className="topic-highlight-item"
+                    onClick={() => scrollToTopic(index)}
+                  >
+                    <span className="topic-number">0{index + 1}</span>
+                    <span className="topic-name">{topic.name}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="narrative-text">
+                {narrative.introduction.split('\n').map((paragraph, index) => (
+                  paragraph.trim() && (
+                    <p key={`intro-${index}`} className="narrative-paragraph">
+                      {paragraph}
+                    </p>
+                  )
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* Research Areas Grid */}
+          <section className="research-areas">
+            <div className="section-header">
+              <h2>Research Areas</h2>
+              <p className="section-subtitle">Key themes and contributions from the year</p>
+            </div>
             
-            {/* Topics Grid */}
-            <div className="topics-highlight">
+            <div className="topics-grid" ref={topicsRef}>
               {narrative.topics.map((topic, index) => (
-                <button
-                  key={index}
-                  className="topic-highlight-item"
-                  onClick={() => scrollToTopic(index)}
-                >
-                  <span className="topic-number">0{index + 1}</span>
-                  <span className="topic-name">{topic.name}</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="narrative-text">
-              {narrative.introduction.split('\n').map((paragraph, index) => (
-                paragraph.trim() && (
-                  <p key={`intro-${index}`} className="narrative-paragraph">
-                    {paragraph}
-                  </p>
-                )
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Research Areas Grid */}
-        <section className="research-areas">
-          <div className="section-header">
-            <h2>Research Areas</h2>
-            <p className="section-subtitle">Key themes and contributions from the year</p>
-          </div>
-          
-          <div className="topics-grid" ref={topicsRef}>
-            {narrative.topics.map((topic, index) => (
-              <div id={`topic-${index}`} key={index} className="topic-group">
-                <div className={`topic-card topic-variant-${index % 4}`}>
-                  <div className="topic-content">
-                    <div className="topic-header">
-                      <span className="topic-number">0{index + 1}</span>
-                      <h3>{topic.name}</h3>
+                <div id={`topic-${index}`} key={index} className="topic-group">
+                  <div className={`topic-card topic-variant-${index % 4}`}>
+                    <div className="topic-content">
+                      <div className="topic-header">
+                        <span className="topic-number">0{index + 1}</span>
+                        <h3>{topic.name}</h3>
+                      </div>
+                      <p className="topic-synthesis">{topic.synthesis}</p>
                     </div>
-                    <p className="topic-synthesis">{topic.synthesis}</p>
                   </div>
-                </div>
 
-                <div className="papers-grid">
-                  {topic.papers.map((paper, pIndex) => (
-                    <div
-                      key={`${index}-paper-${pIndex}`}
-                      className={`paper-item ${selectedPaper?.topicIndex === index && selectedPaper?.paperIndex === pIndex ? 'active' : ''}`}
-                      onClick={() => setSelectedPaper({ topicIndex: index, paperIndex: pIndex })}
-                    >
-                      <div className="paper-item-content">
-                        <h4 className="paper-title">{paper.title}</h4>
-                        <p className="paper-summary">{paper.summary}</p>
-                        <div className="paper-authors">
-                          {paper.authors.map((author, aIndex) => (
-                            <span key={aIndex} className="author-tag">{author.full_name}</span>
-                          ))}
+                  <div className="papers-grid">
+                    {topic.papers.map((paper, pIndex) => (
+                      <div
+                        key={`${index}-paper-${pIndex}`}
+                        className={`paper-item ${selectedPaper?.topicIndex === index && selectedPaper?.paperIndex === pIndex ? 'active' : ''}`}
+                        onClick={() => setSelectedPaper({ topicIndex: index, paperIndex: pIndex })}
+                      >
+                        <div className="paper-item-content">
+                          <h4 className="paper-title">{paper.title}</h4>
+                          <p className="paper-summary">{paper.summary}</p>
+                          <div className="paper-authors">
+                            {paper.authors.map((author, aIndex) => (
+                              <span key={aIndex} className="author-tag">{author.full_name}</span>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </main>
-    </div>
+              ))}
+            </div>
+          </section>
+        </main>
+      </div>
+    </>
   )
 }
 
