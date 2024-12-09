@@ -26,6 +26,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "NUM_TOPICS": 5,  # Number of research topics to cluster papers into
     "MAX_WORKERS": 16,  # Maximum number of parallel workers
     
+    # Summary length settings (in sentences)
+    "PAPER_SUMMARY_SENTENCES": 3,  # Target number of sentences for individual paper summaries
+    "TOPIC_SUMMARY_SENTENCES": 5,  # Target number of sentences for topic/research area summaries
+    "NARRATIVE_SENTENCES": 6,  # Target number of sentences for the narrative year-in-review
+    
     # Cache settings
     "CACHE_VERSION": "2.0",  # Version of the cache format
     

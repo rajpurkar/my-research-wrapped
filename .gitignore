@@ -18,3 +18,4 @@ docker-compose.yml
 *.pdf
 *.txt
 *.csv
+.pyc
