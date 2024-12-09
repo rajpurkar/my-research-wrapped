@@ -28,9 +28,6 @@ from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain.schema import Document
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
 
-if TYPE_CHECKING:
-    from typing import Any, Callable
-
 # Configure logging
 def setup_logging():
     """Configure logging with timestamps and levels"""
@@ -61,7 +58,7 @@ DEFAULT_CONFIG = {
     
     # Directory settings
     "PDF_FOLDER": "pdfs",
-    "OUTPUT_DIR": "outputs",  # Simplified output path
+    "OUTPUT_DIR": "outputs",  # Single outputs directory
     
     # Processing settings
     "NUM_TOPICS": 5,
@@ -296,6 +293,44 @@ PROMPTS = {
     
     Focus on extracting accurate technical details and maintain the original formatting of names.
     """,
+    
+    "PAPER_INITIAL_ANALYSIS": """
+    Analyze this research paper and extract the following information:
+    
+    Text: {text}
+    
+    Return a JSON object with these fields:
+    1. "title": The paper's full title
+    2. "authors": List of complete author names (first and last names)
+    3. "technical_summary": A detailed technical summary of the key contributions (3-4 sentences)
+    4. "brief_summary": A 1-2 sentence technical summary focusing on the core innovation
+    5. "weight": A score from 0.1 to 1.0 indicating the paper's technical depth and significance
+    
+    Guidelines:
+    - For authors: Include both first and last names, remove titles (Dr., Prof., etc.)
+    - For summaries: Focus on concrete technical details, methods, and results
+    - For weight: Consider novelty, technical depth, and empirical validation
+    
+    Return ONLY the JSON object, nothing else.
+    """,
+    
+    "NORMALIZE_AUTHORS": """
+    Normalize these author names by following these rules EXACTLY:
+    1. Keep ONLY first and last name, remove ALL middle names/initials
+    2. Remove ALL titles (Dr., Prof., etc.) and suffixes (Jr., III, etc.)
+    3. Convert ALL special characters to their basic form:
+       - á,à,ä,â -> a
+       - é,è,ë,ê -> e
+       - í,ì,ï,î -> i
+       - ó,ò,ö,ô -> o
+       - ú,ù,ü,û -> u
+       - ñ -> n
+    4. MAINTAIN the EXACT capitalization from the original names
+    5. Remove ALL extra spaces
+    
+    Original names: {names}
+    Return a JSON array of normalized names, maintaining original case.
+    """,
 }
 
 # Base Classes
@@ -392,43 +427,32 @@ class CacheManager:
 class ResearchSummaryManager(FileManager):
     """Manages the processing and storage of research summaries."""
     
-    def __init__(self, output_dir: str = DEFAULT_CONFIG["OUTPUT_DIR"]):
-        super().__init__(Path(output_dir))
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+        self.papers_dir = self.output_dir / "papers"
+        self.topics_dir = self.output_dir / "topics"
+        self.narrative_path = self.output_dir / "year_in_review_narrative.txt"
         
-        # Create subdirectories directly under output_dir
-        self.subdirs = {
-            "cache": self.base_dir / "cache",
-            "summaries": self.base_dir / "summaries",
-            "papers": self.base_dir / "papers",
-            "topics": self.base_dir / "topics",
-            "data": self.base_dir / "data"
-        }
+        # Create directories if they don't exist
+        self.papers_dir.mkdir(parents=True, exist_ok=True)
+        self.topics_dir.mkdir(parents=True, exist_ok=True)
         
-        for directory in self.subdirs.values():
-            directory.mkdir(exist_ok=True)
-            
-        # Define common paths
-        self.paths = {
-            "partial_results": self.subdirs["data"] / "partial_results.json",
-            "final_summaries": self.subdirs["data"] / "final_summaries.json",
-            "narrative": self.base_dir / "year_in_review_narrative.txt"
-        }
-    
-    def get_paper_cache_path(self, paper_hash: str) -> Path:
-        """Get path for individual paper cache file."""
-        return self.subdirs["cache"] / f"{paper_hash}.json"
-    
-    def get_paper_path(self, paper_hash: str) -> Path:
-        """Get path for processed paper data."""
-        return self.subdirs["papers"] / f"{paper_hash}.json"
+        super().__init__(self.output_dir)
+        
+    def get_paper_path(self, paper_title: str) -> Path:
+        """Get path for paper data and summary."""
+        safe_name = re.sub(r'[^\w\s-]', '_', paper_title)
+        safe_name = re.sub(r'[-\s]+', '_', safe_name)
+        safe_name = safe_name.strip('_').lower()
+        safe_name = safe_name or 'unnamed_paper'
+        return self.papers_dir / f"{safe_name}.json"
     
     def get_topic_path(self, topic_name: str) -> Path:
         """Get path for topic data with proper filename sanitization."""
         safe_name = re.sub(r'[^\w\s-]', '_', topic_name)
         safe_name = re.sub(r'[-\s]+', '_', safe_name)
-        safe_name = safe_name.strip('_').lower()
         safe_name = safe_name or 'unnamed_topic'
-        return self.subdirs["topics"] / f"{safe_name}.json"
+        return self.topics_dir / f"{safe_name}.json"
 
 # Processing Classes
 class LLMProcessor:
@@ -714,21 +738,96 @@ class TopicSummary:
         }
 
 # Processing Functions
+def parse_paper_analysis(text: str) -> Dict[str, Any]:
+    """Parse the paper analysis from the model output.
+    
+    Args:
+        text: Raw text output from the model
+        
+    Returns:
+        Parsed JSON object
+        
+    Raises:
+        ValueError: If parsing fails
+    """
+    # First try parsing the raw text as JSON
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+        
+    # Try extracting JSON between markdown code blocks
+    try:
+        # Look for content between ```json and ``` markers
+        json_start = text.find("```json")
+        if json_start != -1:
+            json_start += 7  # Length of ```json
+            json_end = text.find("```", json_start)
+            if json_end != -1:
+                json_str = text[json_start:json_end].strip()
+                return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+        
+    # Try extracting anything that looks like JSON
+    try:
+        # Look for content between { and }
+        json_start = text.find("{")
+        if json_start != -1:
+            json_end = text.rfind("}") + 1
+            if json_end > json_start:
+                json_str = text[json_start:json_end]
+                return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+        
+    raise ValueError("Failed to parse paper analysis result")
+
+# Remove the Pydantic imports and class, and replace with JSON schema
+PAPER_ANALYSIS_SCHEMA = {
+    "title": "PaperAnalysis",
+    "description": "Schema for the initial paper analysis",
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "The title of the paper"
+        },
+        "authors": {
+            "type": "array",
+            "description": "List of author names as they appear in the paper",
+            "items": {
+                "type": "string"
+            }
+        },
+        "technical_summary": {
+            "type": "string",
+            "description": "Detailed technical summary of the paper's content"
+        },
+        "brief_summary": {
+            "type": "string", 
+            "description": "Brief, high-level summary of the paper's main points"
+        },
+        "weight": {
+            "type": "number",
+            "description": "Importance weight from 0-1 based on paper impact and relevance",
+            "minimum": 0.0,
+            "maximum": 1.0
+        }
+    },
+    "required": ["title", "authors", "technical_summary", "brief_summary", "weight"]
+}
+
 def process_pdf(
     pdf_file: str,
     llm_processor: LLMProcessor,
-    cache_manager: CacheManager,
+    manager: ResearchSummaryManager,
     status_display: Optional[StatusDisplay] = None
 ) -> Paper:
     """Process a single PDF file and return a Paper object."""
     logger.info(f"Starting processing of {pdf_file}")
     
     try:
-        if cache_manager.is_cached(pdf_file):
-            logger.info(f"Using cached data for {pdf_file}")
-            cache_data = cache_manager.get_cache(pdf_file)
-            return Paper.from_cache(cache_data, pdf_file)
-
         # Extract text from PDF
         logger.info(f"Extracting text from {pdf_file}")
         text = extract_text_from_pdf(pdf_file)
@@ -738,41 +837,57 @@ def process_pdf(
         
         logger.info(f"Text extracted successfully from {pdf_file} ({len(text)} chars)")
 
-        # Extract metadata using LLM
-        logger.info(f"Extracting metadata for {pdf_file}")
+        # Use structured output with JSON schema
+        structured_llm = llm_processor.llm.with_structured_output(PAPER_ANALYSIS_SCHEMA)
+        analysis_data = structured_llm.invoke(
+            f"Analyze this academic paper and extract the key information: {text}"
+        )
         
-        title = llm_processor.invoke_with_retry("TITLE_EXTRACTION", text=text[:2000])
-        logger.debug(f"Extracted title: {title}")
+        # analysis_data is now a dict, so use dict access
+        if analysis_data["authors"]:
+            normalized_names = llm_processor.invoke_with_retry(
+                "NORMALIZE_AUTHORS",
+                names=json.dumps(analysis_data["authors"])
+            )
+            try:
+                normalized_names = json.loads(normalized_names)
+            except json.JSONDecodeError:
+                normalized_names = analysis_data["authors"]  # Fallback to original names
+        else:
+            normalized_names = []
         
-        author_text = llm_processor.invoke_with_retry("AUTHOR_EXTRACTION", text=text[:2000])
-        logger.debug(f"Extracted authors: {author_text}")
+        # Create author objects
+        authors = [
+            Author(full_name=orig, normalized_name=norm)
+            for orig, norm in zip(analysis_data["authors"], normalized_names)
+        ]
         
-        # Generate both summaries at once
-        technical_summary = llm_processor.invoke_with_retry("TECHNICAL_SUMMARY", text=text)
-        brief_summary = llm_processor.invoke_with_retry("BRIEF_SUMMARY", text=text)
-        
-        logger.debug(f"Generated technical summary length: {len(technical_summary)}")
-        logger.debug(f"Generated brief summary length: {len(brief_summary)}")
-
         # Create paper object
         paper = Paper.create(
             pdf_file=pdf_file,
-            title=title or "Untitled",
-            authors=[Author.create(name.strip(), llm_processor) 
-                    for name in author_text.split('\n') if name.strip()],
-            summary=technical_summary,
-            brief_summary=brief_summary,
-            weight=0.5,
-            role="unknown",
+            title=analysis_data["title"],
+            authors=authors,
+            summary=analysis_data["technical_summary"],
+            brief_summary=analysis_data["brief_summary"],
+            weight=analysis_data["weight"],
+            role="primary_research",
             original_text=text
         )
         
+        # Save paper data
+        paper_path = manager.get_paper_path(paper.title)
+        paper_data = {
+            "title": paper.title,
+            "file_path": paper.file_path,
+            "authors": [{"full_name": a.full_name, "normalized_name": a.normalized_name} for a in paper.authors],
+            "brief_summary": paper.brief_summary,
+            "technical_summary": paper.summary,
+            "weight": paper.weight,
+            "role": paper.role
+        }
+        manager.save_json(paper_path, paper_data)
+        
         logger.info(f"Successfully processed {pdf_file}")
-        
-        # Cache results
-        cache_manager.set_cache(pdf_file, paper.to_cache_dict())
-        logger.info(f"Cached results for {pdf_file}")
-        
         return paper
         
     except Exception as e:
@@ -783,6 +898,7 @@ def process_pdf(
 def process_papers_in_parallel(
     pdf_files: List[str],
     parallel_processor: ParallelProcessor,
+    manager: ResearchSummaryManager,
     status_display: Optional[StatusDisplay] = None
 ) -> List[Paper]:
     """Process multiple PDFs in parallel."""
@@ -794,7 +910,7 @@ def process_papers_in_parallel(
             return process_pdf(
                 pdf_file,
                 parallel_processor.llm_processor,
-                parallel_processor.cache_manager,
+                manager,
                 None  # Avoid nested status displays
             )
         except Exception as e:
@@ -1044,11 +1160,9 @@ def run_pdf_summarization(
     # Initialize components
     manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
     llm_processor = LLMProcessor(llm=llm)
-    cache_manager = CacheManager(manager)
     parallel_processor = ParallelProcessor(
         max_workers=cfg["MAX_WORKERS"],
-        llm_processor=llm_processor,
-        cache_manager=cache_manager
+        llm_processor=llm_processor
     )
     
     # Get PDF files
@@ -1060,15 +1174,16 @@ def run_pdf_summarization(
     papers = process_papers_in_parallel(
         pdf_files=pdf_files,
         parallel_processor=parallel_processor,
+        manager=manager,
         status_display=status_display
     )
     
-    # Convert papers to paper summaries directly using existing summaries
+    # Convert papers to paper summaries
     paper_summaries = []
     for paper in papers:
         paper_summaries.append(PaperSummary(
             paper=paper,
-            brief_summary=paper.brief_summary,  # These should be added to Paper class
+            brief_summary=paper.brief_summary,
             technical_summary=paper.summary,
             weight=paper.weight
         ))
@@ -1081,20 +1196,23 @@ def run_pdf_summarization(
         status_display=status_display
     )
     
-    # Create topic summaries
+    # Create and save topic summaries
     topic_summaries = []
     for topic_name, topic_papers in topic_groups.items():
-        topic_summaries.append(
-            create_topic_summary(
-                name=topic_name,
-                paper_summaries=[
-                    ps for ps in paper_summaries
-                    if ps.paper in topic_papers
-                ],
-                llm_processor=llm_processor,
-                status_display=status_display
-            )
+        topic_summary = create_topic_summary(
+            name=topic_name,
+            paper_summaries=[
+                ps for ps in paper_summaries
+                if ps.paper in topic_papers
+            ],
+            llm_processor=llm_processor,
+            status_display=status_display
         )
+        topic_summaries.append(topic_summary)
+        
+        # Save individual topic summary
+        topic_path = manager.get_topic_path(topic_name)
+        manager.save_json(topic_path, topic_summary.to_dict())
     
     # Generate narrative
     narrative = generate_narrative(
@@ -1103,12 +1221,8 @@ def run_pdf_summarization(
         status_display=status_display
     )
     
-    # Save results
-    for topic in topic_summaries:
-        topic_path = manager.get_topic_path(topic.name)
-        manager.save_json(topic_path, topic.to_dict())
-    
-    with open(manager.paths["narrative"], "w") as f:
+    # Save narrative
+    with open(manager.narrative_path, "w") as f:
         f.write(narrative)
     
     if status_display:
