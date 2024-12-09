@@ -5,11 +5,11 @@ A powerful tool to automatically summarize and analyze collections of research p
 ## Features
 
 - 📚 Bulk PDF Processing: Process multiple research papers simultaneously
-- 🎯 Smart Author Detection: Automatically identifies your papers and contribution level
+- 🎯 Smart Author Detection: Automatically identifies and normalizes author names
 - 📊 Topic Clustering: Groups related papers into coherent research themes
-- 💡 Intelligent Summarization: Generates concise summaries of individual papers and topic areas
-- 👥 Collaboration Analysis: Identifies and analyzes your research collaborators
-- 💾 Caching System: Saves processing results for faster subsequent runs
+- 💡 Intelligent Summarization: Generates concise technical summaries of papers and research areas
+- 🔄 Caching System: Efficient caching with version control for faster subsequent runs
+- 🎨 Rich Terminal Output: Beautiful progress indicators and formatted output
 
 ## Prerequisites
 
@@ -45,63 +45,86 @@ OPENAI_API_KEY=your-api-key-here
 
 ```
 .
-├── pdfs/           # Place your PDF files here
-├── outputs/        # Generated summaries and analysis
-├── summarize_pdf.py # Main script
-├── .env           # Environment variables
+├── pdfs/              # Place your PDF files here
+├── outputs/           # Generated outputs
+│   ├── cache/        # Cached processing results
+│   ├── summaries/    # Individual paper summaries
+│   ├── papers/       # Processed paper data
+│   ├── topics/       # Topic-based groupings
+│   └── data/         # Additional analysis data
+├── summarize_pdf.py   # Main script
+├── .env              # Environment variables
 └── README.md
+```
+
+## Configuration
+
+The tool uses a configuration system defined in `DEFAULT_CONFIG`:
+
+```python
+DEFAULT_CONFIG = {
+    # Author settings
+    "AUTHOR_NAME": "Your Name",
+    
+    # Model settings
+    "MODEL_NAME": "gpt-4o-mini",
+    "MODEL_TEMPERATURE": 0.1,
+    
+    # Directory settings
+    "PDF_FOLDER": "pdfs",
+    "OUTPUT_DIR": "outputs",
+    
+    # Processing settings
+    "NUM_TOPICS": 5,
+    "MAX_WORKERS": 16,
+    
+    # Cache settings
+    "CACHE_VERSION": "2.0",
+}
 ```
 
 ## Usage
 
 1. Place your research papers (PDFs) in the `pdfs/` directory.
 
-2. Configure your settings in the script or use the defaults:
-   - `AUTHOR_NAME`: Your name as it appears in publications
-   - `MODEL_NAME`: The OpenAI model to use (default: "gpt-4-mini")
-   - `NUM_TOPICS`: Number of topic clusters (default: 5)
-   - Other settings can be found in the `DEFAULT_CONFIG` dictionary
-
-3. Run the script:
+2. Run the script:
 ```bash
 python summarize_pdf.py
 ```
 
 The script will:
-- Process all PDFs in the `pdfs/` directory
-- Generate summaries for each paper
-- Group papers into topics
-- Create a narrative summary of your research
-- Save all results in the `outputs/` directory
+- Process all PDFs in parallel using ThreadPoolExecutor
+- Generate technical summaries for each paper
+- Group papers into coherent research topics
+- Create a flowing narrative connecting the research themes
+- Cache results for faster subsequent runs
 
-## Output Structure
+## Output Files
 
 The tool generates several types of output in the `outputs/` directory:
-- Individual paper summaries
-- Topic-based groupings
-- Collaboration analysis
-- Overall research narrative
 
-## Customization
+- `cache/`: Cached processing results with version control
+- `papers/`: Individual paper data and summaries
+- `topics/`: Topic-based groupings and analyses
+- `data/`: Processing metadata and partial results
+- `year_in_review_narrative.txt`: Overall research narrative
 
-You can modify the default configuration by editing the `DEFAULT_CONFIG` dictionary in `summarize_pdf.py`:
+## Advanced Features
 
-```python
-DEFAULT_CONFIG = {
-    "AUTHOR_NAME": "Your Name",
-    "MODEL_NAME": "gpt-4-mini",
-    "MODEL_TEMPERATURE": 0.1,
-    "NUM_TOPICS": 5,
-    "MAX_WORKERS": 16,
-}
-```
+### Author Name Normalization
+- Intelligent handling of author names
+- Removes titles, middle names, and special characters
+- Maintains consistent capitalization
 
-## Tips for Best Results
+### Topic Clustering
+- Groups papers into coherent research themes
+- Ensures balanced topic distribution
+- Generates technical narratives connecting papers
 
-1. Ensure your PDFs are text-searchable (OCR processed if necessary)
-2. Use your full name as it appears in publications
-3. Keep your PDFs organized in the `pdfs/` directory
-4. Check the `.env` file is properly configured with your API key
+### Caching System
+- Version-controlled caching
+- Efficient reprocessing of modified files
+- Maintains processing state across runs
 
 ## Troubleshooting
 
@@ -109,16 +132,20 @@ Common issues and solutions:
 
 1. **API Key Issues**
    - Ensure your OpenAI API key is correctly set in the `.env` file
-   - Check that the `.env` file is in the project root directory
+   - Check that python-dotenv is properly installed
 
 2. **PDF Processing Errors**
-   - Verify that PDFs are not corrupted
-   - Ensure PDFs are text-searchable
+   - Verify PDFs are text-searchable
    - Check file permissions
+   - Ensure PDFs are not corrupted
 
 3. **Memory Issues**
-   - Reduce `MAX_WORKERS` in the configuration
+   - Adjust `MAX_WORKERS` in configuration
    - Process fewer PDFs at a time
+
+4. **Cache Issues**
+   - Clear the `outputs/cache/` directory if experiencing inconsistencies
+   - Check `CACHE_VERSION` in configuration
 
 ## Contributing
 
@@ -133,4 +160,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This tool uses several open-source libraries:
 - LangChain for AI interactions
 - PyPDF for PDF processing
-- Rich for beautiful terminal output 
+- Rich for terminal output formatting
+- python-dotenv for environment management
