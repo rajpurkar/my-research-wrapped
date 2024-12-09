@@ -315,83 +315,6 @@ class FileManager:
             return path
         # Otherwise join with base_dir
         return self.base_dir / path
-        
-    def save_json(self, filename: str | Path, data: dict):
-        """Save data as JSON."""
-        path = self.get_path(filename)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w') as f:
-            json.dump(data, f, indent=4)
-            
-    def load_json(self, filename: str | Path, default: dict = None) -> dict:
-        """Load JSON data with version checking."""
-        path = self.get_path(filename)
-        if path.exists():
-            try:
-                with open(path, 'r') as f:
-                    data = json.load(f)
-                if data.get("version") != DEFAULT_CONFIG["CACHE_VERSION"]:
-                    return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-                return data
-            except (json.JSONDecodeError, KeyError) as e:
-                console.print(f"[red]Failed to load {filename}: {e}[/red]")
-                return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-        return default or {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-
-class CacheManager:
-    """Handles all caching operations."""
-    
-    def __init__(self, manager: 'ResearchSummaryManager'):
-        self.manager = manager
-    
-    def get_cache_key(self, pdf_path: str) -> str:
-        """Generate a cache key based on file path and last modified time."""
-        pdf_stats = os.stat(pdf_path)
-        content_key = f"{pdf_path}:{pdf_stats.st_mtime}"
-        return hashlib.md5(content_key.encode()).hexdigest()
-    
-    def is_cached(self, pdf_path: str) -> bool:
-        """Check if a paper is cached and valid."""
-        paper_hash = self.get_cache_key(pdf_path)
-        cache_file = self.manager.get_paper_cache_path(paper_hash)
-        
-        if cache_file.exists():
-            try:
-                with open(cache_file, 'r') as f:
-                    cache_data = json.load(f)
-                return cache_data.get("version") == DEFAULT_CONFIG["CACHE_VERSION"]
-            except (json.JSONDecodeError, KeyError):
-                return False
-        return False
-    
-    def get_cache(self, pdf_path: str) -> dict:
-        """Get cache data for a paper."""
-        paper_hash = self.get_cache_key(pdf_path)
-        cache_file = self.manager.get_paper_cache_path(paper_hash)
-        
-        if cache_file.exists():
-            try:
-                with open(cache_file, 'r') as f:
-                    cache_data = json.load(f)
-                if cache_data.get("version") == DEFAULT_CONFIG["CACHE_VERSION"]:
-                    return cache_data
-            except (json.JSONDecodeError, KeyError):
-                pass
-        return {"version": DEFAULT_CONFIG["CACHE_VERSION"]}
-    
-    def set_cache(self, pdf_path: str, cache_data: dict):
-        """Set cache data for a paper."""
-        paper_hash = self.get_cache_key(pdf_path)
-        cache_file = self.manager.get_paper_cache_path(paper_hash)
-        
-        cache_data["version"] = DEFAULT_CONFIG["CACHE_VERSION"]
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        try:
-            with open(cache_file, 'w') as f:
-                json.dump(cache_data, f, indent=4)
-        except Exception as e:
-            console.print(f"[yellow]Failed to save cache for {Path(pdf_path).name}: {e}[/yellow]")
 
 class ResearchSummaryManager(FileManager):
     """Manages all research summary data and operations."""
@@ -595,10 +518,9 @@ class DocumentProcessor:
 class ParallelProcessor:
     """Handles parallel processing with consistent error handling and progress tracking."""
     
-    def __init__(self, max_workers: int = DEFAULT_CONFIG["MAX_WORKERS"], llm_processor: Optional[LLMProcessor] = None, cache_manager: Optional[CacheManager] = None):
+    def __init__(self, max_workers: int = DEFAULT_CONFIG["MAX_WORKERS"], llm_processor: Optional[LLMProcessor] = None):
         self.max_workers = max_workers
         self.llm_processor = llm_processor
-        self.cache_manager = cache_manager
     
     def process_items(
         self,
@@ -919,19 +841,6 @@ def process_pdf(
             original_text=text
         )
         
-        # Save paper data
-        paper_path = manager.get_paper_path(paper.title)
-        paper_data = {
-            "title": paper.title,
-            "file_path": paper.file_path,
-            "authors": [{"full_name": a.full_name, "normalized_name": a.normalized_name} for a in paper.authors],
-            "summary": paper.summary,
-            "weight": paper.weight,
-            "role": paper.role
-        }
-        manager.save_json(paper_path, paper_data)
-        
-        logger.info(f"Successfully processed {pdf_file}")
         return paper
         
     except Exception as e:
@@ -1221,7 +1130,6 @@ def run_pdf_summarization(
                 
                 # Save topic synthesis
                 topic_path = manager.get_topic_path(topic_name)
-                manager.save_json(topic_path, topic_synthesis.to_dict())
                 progress.advance(task_topics)
             
             # Generate narrative
@@ -1234,18 +1142,19 @@ def run_pdf_summarization(
             )
             progress.update(task_narrative, completed=1)
         
-        # Update narrative JSON structure to include complete information
+        # Save only the narrative.json file
         narrative_json: NarrativeOutput = {
             "author": cfg["AUTHOR_NAME"],
             "introduction": narrative.split("\n\n")[0],
-            "topics": [topic.to_dict() for topic in topic_syntheses]  # Use the topic syntheses directly
+            "topics": [topic.to_dict() for topic in topic_syntheses]
         }
 
-        # Save as JSON with complete hierarchical structure
-        with open(manager.narrative_path.with_suffix('.json'), "w", encoding='utf-8') as f:
+        # Save only narrative.json in the output directory
+        narrative_path = Path(cfg["OUTPUT_DIR"]) / "narrative.json"
+        with open(narrative_path, "w", encoding='utf-8') as f:
             json.dump(narrative_json, f, indent=2, ensure_ascii=False)
         
-        # Generate CSV summary
+        # Keep CSV generation if needed
         generate_csv_summary(
             topic_syntheses=topic_syntheses,
             output_path=cfg["CSV_OUTPUT"],

@@ -12,6 +12,7 @@ Dockerfile
 docker-compose.yml
 
 # Python
+__pycache__
 .pytest_cache
 
 *.pdf
@@ -19,5 +20,4 @@ docker-compose.yml
 *.csv
 .pyc
 
-outputs/
 dist/
