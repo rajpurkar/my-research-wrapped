@@ -4,6 +4,7 @@ import glob
 import os
 import json
 import hashlib
+import sys
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, List, Dict, Tuple, Optional, TypedDict
@@ -21,6 +22,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich import print as rprint
+from rich.logging import RichHandler
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
+from rich.traceback import install as install_rich_traceback
+from rich.theme import Theme
 
 from langchain.chains.summarize import load_summarize_chain
 from langchain_openai import ChatOpenAI
@@ -36,20 +41,48 @@ class PaperAnalysis(TypedDict):
 
 # Configure logging
 def setup_logging():
-    """Configure logging with timestamps and levels"""
-    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    """Configure rich-based logging with custom formatting and colors"""
+    # Install rich traceback handler
+    install_rich_traceback(show_locals=True)
+    
+    # Create custom theme for logging
+    custom_theme = Theme({
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "red bold",
+        "debug": "dim cyan",
+        "http": "magenta"
+    })
+    
+    # Initialize rich console with theme
+    console = Console(theme=custom_theme)
+    
+    # Configure rich logging
     logging.basicConfig(
         level=logging.INFO,
-        format=log_format,
-        handlers=[
-            logging.StreamHandler()
-        ]
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(
+            console=console,
+            rich_tracebacks=True,
+            tracebacks_show_locals=True,
+            show_time=True,
+            show_path=False,
+            markup=True,
+            log_time_format="[%X]"
+        )]
     )
-    return logging.getLogger(__name__)
+    
+    # Set up logging levels for different components
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # Reduce HTTP noise
+    logging.getLogger("openai").setLevel(logging.WARNING)  # Reduce OpenAI API noise
+    
+    logger = logging.getLogger("rich")
+    return logger
 
 logger = setup_logging()
 
-# Initialize rich console
+# Initialize rich console for global use
 console = Console()
 
 # Configuration Constants
@@ -66,7 +99,7 @@ DEFAULT_CONFIG = {
     "OUTPUT_DIR": "outputs",  # Single outputs directory
     
     # Processing settings
-    "NUM_TOPICS": 5,
+    "NUM_TOPICS": 4,  # Reduced from 5 to ensure at least 3 papers per topic with better distribution
     "MAX_WORKERS": 32,  # Increased for faster processing
     
     # Cache settings
@@ -162,38 +195,42 @@ Papers:
 {papers}
 
 Requirements:
-1. Each paper MUST be assigned to EXACTLY ONE topic
-2. Each topic should have between {min_papers} and {max_papers} papers
+1. Each topic MUST have AT LEAST 3 papers and no more than {max_papers} papers
+2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
 3. Target number of papers per topic is {target_per_topic:.1f}
-4. Ensure at least one major paper (weight 1.0) per topic if possible
+4. Ensure topics are broad enough to encompass multiple related papers
+5. Balance the distribution of papers across topics (avoid having some topics with many papers and others with few)
 
 Guidelines for topic names:
-1. Make a clear, declarative statement about our specific technical innovation and its impact
-2. Focus on the shared methodological approach or technical framework
-3. Highlight the key advance or capability we enabled
+1. Make a clear, declarative statement about the shared technical innovation and its impact
+2. Focus on common methodological approaches or technical frameworks across multiple papers
+3. Highlight the key advances or capabilities enabled by the group of papers
 4. Use natural language (no underscores)
 5. Be specific enough to distinguish from other topics
 6. Include both the technical method and its application/impact
 
 Good topic names:
-- "Transformer Models Achieve Human Expert Performance in Medical Diagnosis"
+- "Transformer Models Advance Medical Diagnosis Through Multi-Modal Learning"
 - "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
-- "Multimodal Foundation Models Unify Clinical Tasks Across Specialties"
+- "Foundation Models Transform Clinical Decision Support Systems"
 
 Bad topic names:
-- "Medical AI" (too vague, no specific claim)
-- "Advancing Drug Discovery through AI" (unclear technical approach)
-- "Deep Learning Research" (not focused on specific innovation)
-- "Clinical_NLP_Advances" (uses underscores, not a clear claim)
+- "Medical AI" (too vague)
+- "Improving Healthcare" (not technical enough)
+- "Deep Learning Research" (not focused)
+- "Clinical_NLP_Advances" (uses underscores)
+- "Novel Chest X-ray Analysis" (too specific to one paper)
 
 When clustering:
-1. Look for papers that share core technical approaches (e.g., specific model architectures, training methods)
-2. Group papers that build on the same foundational innovation
+1. Look for papers that share core technical approaches (e.g., specific architectures, training methods)
+2. Group papers that build on similar foundational innovations
 3. Consider how papers advance a unified research narrative
-4. Ensure each topic represents a distinct technical contribution
+4. Ensure each topic represents a broad technical contribution area
+5. Avoid creating topics around single papers or very specific applications
 
 Return ONLY a JSON object with topic names as keys and paper indices as values.
-Each paper index should appear exactly once across all topics.""",
+Each paper index should appear exactly once across all topics.
+Ensure each topic has at least 3 papers.""",
     
     "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
 
@@ -430,38 +467,42 @@ Papers:
 {papers}
 
 Requirements:
-1. Each paper MUST be assigned to EXACTLY ONE topic
-2. Each topic should have between {min_papers} and {max_papers} papers
+1. Each topic MUST have AT LEAST 3 papers and no more than {max_papers} papers
+2. Papers should be grouped based on shared technical approaches, methodologies, or research goals
 3. Target number of papers per topic is {target_per_topic:.1f}
-4. Ensure at least one major paper (weight 1.0) per topic if possible
+4. Ensure topics are broad enough to encompass multiple related papers
+5. Balance the distribution of papers across topics (avoid having some topics with many papers and others with few)
 
 Guidelines for topic names:
-1. Make a clear, declarative statement about our specific technical innovation and its impact
-2. Focus on the shared methodological approach or technical framework
-3. Highlight the key advance or capability we enabled
+1. Make a clear, declarative statement about the shared technical innovation and its impact
+2. Focus on common methodological approaches or technical frameworks across multiple papers
+3. Highlight the key advances or capabilities enabled by the group of papers
 4. Use natural language (no underscores)
 5. Be specific enough to distinguish from other topics
 6. Include both the technical method and its application/impact
 
 Good topic names:
-- "Transformer Models Achieve Human Expert Performance in Medical Diagnosis"
+- "Transformer Models Advance Medical Diagnosis Through Multi-Modal Learning"
 - "Self-Supervised Learning Enables Zero-Shot Medical Image Analysis"
-- "Multimodal Foundation Models Unify Clinical Tasks Across Specialties"
+- "Foundation Models Transform Clinical Decision Support Systems"
 
 Bad topic names:
-- "Medical AI" (too vague, no specific claim)
-- "Advancing Drug Discovery through AI" (unclear technical approach)
-- "Deep Learning Research" (not focused on specific innovation)
-- "Clinical_NLP_Advances" (uses underscores, not a clear claim)
+- "Medical AI" (too vague)
+- "Improving Healthcare" (not technical enough)
+- "Deep Learning Research" (not focused)
+- "Clinical_NLP_Advances" (uses underscores)
+- "Novel Chest X-ray Analysis" (too specific to one paper)
 
 When clustering:
-1. Look for papers that share core technical approaches (e.g., specific model architectures, training methods)
-2. Group papers that build on the same foundational innovation
+1. Look for papers that share core technical approaches (e.g., specific architectures, training methods)
+2. Group papers that build on similar foundational innovations
 3. Consider how papers advance a unified research narrative
-4. Ensure each topic represents a distinct technical contribution
+4. Ensure each topic represents a broad technical contribution area
+5. Avoid creating topics around single papers or very specific applications
 
 Return ONLY a JSON object with topic names as keys and paper indices as values.
-Each paper index should appear exactly once across all topics.""",
+Each paper index should appear exactly once across all topics.
+Ensure each topic has at least 3 papers.""",
             "TOPIC_SYNTHESIS": """Synthesize our papers' contributions within this research topic.
 
 Papers:
@@ -942,32 +983,49 @@ def process_papers_in_parallel(
     pdf_files: List[str],
     parallel_processor: ParallelProcessor,
     manager: ResearchSummaryManager,
-    status_display: Optional[StatusDisplay] = None
+    status_display: Optional[StatusDisplay] = None,
+    progress: Optional[Progress] = None
 ) -> List[Paper]:
     """Process multiple PDFs in parallel."""
-    if status_display:
-        status_display.update(f"Processing {len(pdf_files)} papers in parallel")
+    logger.info("[bold blue]Starting parallel processing[/bold blue]")
     
     def process_single(pdf_file: str) -> Paper:
         try:
-            return process_pdf(
+            logger.info(f"[dim]Processing {Path(pdf_file).name}[/dim]")
+            paper = process_pdf(
                 pdf_file,
                 parallel_processor.llm_processor,
                 manager,
                 None  # Avoid nested status displays
             )
+            if paper:
+                logger.info(f"[green]✓[/green] Processed {Path(pdf_file).name}")
+            return paper
         except Exception as e:
-            print(f"Error processing {pdf_file}: {str(e)}")
+            logger.error(f"[red]✗[/red] Failed {Path(pdf_file).name}: {str(e)}")
             return None
     
-    papers = parallel_processor.process_items(
-        items=pdf_files,
-        process_fn=process_single,
-        status_msg="Processing PDF files",
-        error_msg="Failed to process PDF file:",
-        status=status_display
-    )
-    return [p for p in papers if p is not None]
+    papers = []
+    with ThreadPoolExecutor(max_workers=parallel_processor.max_workers) as executor:
+        future_to_file = {
+            executor.submit(process_single, pdf_file): pdf_file 
+            for pdf_file in pdf_files
+        }
+        for future in as_completed(future_to_file):
+            pdf_file = future_to_file[future]
+            try:
+                paper = future.result()
+                if paper:
+                    papers.append(paper)
+                if progress:
+                    progress.advance(0)  # Advance the main task
+            except Exception as e:
+                logger.error(f"[red]Error processing {Path(pdf_file).name}[/red]", exc_info=True)
+                if progress:
+                    progress.advance(0)  # Advance even on error
+    
+    logger.info(f"[bold green]✓[/bold green] Completed processing {len(papers)} papers")
+    return papers
 
 def generate_paper_summary(
     paper: Paper,
@@ -1089,104 +1147,136 @@ def run_pdf_summarization(
     status_display: Optional[StatusDisplay] = None
 ) -> Tuple[List[TopicSummary], str]:
     """Main function to run the PDF summarization pipeline."""
-    # Load configuration
-    cfg = DEFAULT_CONFIG.copy()
-    if config:
-        cfg.update(config)
-    
-    if status_display:
-        status_display.update(f"Starting PDF summarization from: {cfg['PDF_FOLDER']}")
-        status_display.update(f"Analyzing contributions for: {cfg['AUTHOR_NAME']}")
-    
-    # Initialize components
-    manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
-    llm_processor = LLMProcessor(llm=llm)
-    parallel_processor = ParallelProcessor(
-        max_workers=cfg["MAX_WORKERS"],
-        llm_processor=llm_processor
-    )
-    
-    # Get PDF files
-    pdf_files = glob.glob(os.path.join(cfg["PDF_FOLDER"], "*.pdf"))
-    if not pdf_files:
-        raise ValueError(f"No PDF files found in {cfg['PDF_FOLDER']}")
-    
-    # Process papers in parallel
-    papers = process_papers_in_parallel(
-        pdf_files=pdf_files,
-        parallel_processor=parallel_processor,
-        manager=manager,
-        status_display=status_display
-    )
-    
-    # Convert papers to paper summaries
-    paper_summaries = []
-    for paper in papers:
-        paper_summaries.append(PaperSummary(
-            paper=paper,
-            summary=paper.summary,
-            weight=paper.weight
-        ))
-    
-    # Group papers by topic
-    topic_groups = group_papers_by_topic(
-        papers=papers,
-        llm_processor=llm_processor,
-        num_topics=cfg["NUM_TOPICS"],
-        status_display=status_display
-    )
-    
-    # Create and save topic summaries
-    topic_summaries = []
-    for topic_name, topic_papers in topic_groups.items():
-        topic_summary = create_topic_synthesis(
-            name=topic_name,
-            paper_summaries=[
-                ps for ps in paper_summaries
-                if ps.paper in topic_papers
-            ],
-            llm_processor=llm_processor,
-            status_display=status_display
-        )
-        topic_summaries.append(topic_summary)
+    try:
+        # Load configuration
+        cfg = DEFAULT_CONFIG.copy()
+        if config:
+            cfg.update(config)
         
-        # Save individual topic summary
-        topic_path = manager.get_topic_path(topic_name)
-        manager.save_json(topic_path, topic_summary.to_dict())
-    
-    # Generate narrative
-    narrative = generate_overall_narrative(
-        topic_syntheses=topic_summaries,
-        llm_processor=llm_processor,
-        status_display=status_display
-    )
-    
-    # Save narrative
-    with open(manager.narrative_path, "w") as f:
-        f.write(narrative)
-    
-    if status_display:
-        status_display.update("Processing complete!")
-    
-    return topic_summaries, narrative
+        logger.info("[bold blue]Starting PDF summarization pipeline[/bold blue]")
+        logger.info(f"Source directory: [cyan]{cfg['PDF_FOLDER']}[/cyan]")
+        logger.info(f"Target author: [cyan]{cfg['AUTHOR_NAME']}[/cyan]")
+        
+        # Initialize components
+        manager = ResearchSummaryManager(cfg["OUTPUT_DIR"])
+        llm_processor = LLMProcessor(llm=llm)
+        parallel_processor = ParallelProcessor(
+            max_workers=cfg["MAX_WORKERS"],
+            llm_processor=llm_processor
+        )
+        
+        # Get PDF files
+        pdf_files = glob.glob(os.path.join(cfg["PDF_FOLDER"], "*.pdf"))
+        if not pdf_files:
+            logger.error(f"[red]No PDF files found in {cfg['PDF_FOLDER']}[/red]")
+            raise ValueError(f"No PDF files found in {cfg['PDF_FOLDER']}")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console,
+            transient=True,
+            expand=True
+        ) as progress:
+            # Create tasks for each stage
+            task_papers = progress.add_task("[cyan]Processing papers...", total=len(pdf_files))
+            task_summaries = progress.add_task("[cyan]Generating summaries...", total=len(pdf_files), visible=False)
+            task_grouping = progress.add_task("[cyan]Grouping papers...", total=1, visible=False)
+            task_topics = progress.add_task("[cyan]Creating topic summaries...", total=5, visible=False)
+            task_narrative = progress.add_task("[cyan]Generating narrative...", total=1, visible=False)
+            
+            # Process papers
+            papers = process_papers_in_parallel(
+                pdf_files=pdf_files,
+                parallel_processor=parallel_processor,
+                manager=manager,
+                status_display=status_display,
+                progress=progress
+            )
+            progress.update(task_papers, completed=len(pdf_files))
+            
+            # Convert to summaries
+            progress.update(task_summaries, visible=True)
+            paper_summaries = []
+            for paper in papers:
+                paper_summaries.append(PaperSummary(
+                    paper=paper,
+                    summary=paper.summary,
+                    weight=paper.weight
+                ))
+                progress.advance(task_summaries)
+            
+            # Group papers
+            progress.update(task_grouping, visible=True)
+            topic_groups = group_papers_by_topic(
+                papers=papers,
+                llm_processor=llm_processor,
+                num_topics=cfg["NUM_TOPICS"],
+                status_display=status_display
+            )
+            progress.update(task_grouping, completed=1)
+            
+            # Create topic summaries
+            progress.update(task_topics, visible=True, total=len(topic_groups))
+            topic_summaries = []
+            for topic_name, topic_papers in topic_groups.items():
+                topic_summary = create_topic_synthesis(
+                    name=topic_name,
+                    paper_summaries=[ps for ps in paper_summaries if ps.paper in topic_papers],
+                    llm_processor=llm_processor,
+                    status_display=status_display
+                )
+                topic_summaries.append(topic_summary)
+                
+                # Save topic summary
+                topic_path = manager.get_topic_path(topic_name)
+                manager.save_json(topic_path, topic_summary.to_dict())
+                progress.advance(task_topics)
+            
+            # Generate narrative
+            progress.update(task_narrative, visible=True)
+            narrative = generate_overall_narrative(
+                topic_syntheses=topic_summaries,
+                llm_processor=llm_processor,
+                status_display=status_display
+            )
+            progress.update(task_narrative, completed=1)
+        
+        # Save narrative
+        with open(manager.narrative_path, "w") as f:
+            f.write(narrative)
+        
+        logger.info("[bold green]✓ Processing completed successfully![/bold green]")
+        return topic_summaries, narrative
+        
+    except Exception as e:
+        logger.error("[bold red]Fatal error in PDF summarization pipeline[/bold red]", exc_info=True)
+        raise
 
 class StatusDisplay:
-    """Handles progress display and status updates."""
+    """Handles progress display and status updates using rich."""
     
     def __init__(self):
-        self.console = Console()
+        self.console = console  # Use global console
     
     def update(self, message: str):
         """Display a status update message."""
-        self.console.print(f"[dim]{message}[/dim]")
+        self.console.print(f"[cyan]{message}[/cyan]")
     
     def error(self, message: str):
         """Display an error message."""
-        self.console.print(f"[red]Error: {message}[/red]")
+        self.console.print(f"[red bold]Error:[/red bold] {message}")
     
     def success(self, message: str):
         """Display a success message."""
-        self.console.print(f"[green]{message}[/green]")
+        self.console.print(f"[green bold]Success:[/green bold] {message}")
+    
+    def warning(self, message: str):
+        """Display a warning message."""
+        self.console.print(f"[yellow]Warning:[/yellow] {message}")
 
 def extract_text_from_pdf(pdf_file: str) -> str:
     """Extract text from a PDF file."""
@@ -1280,20 +1370,16 @@ def group_papers_by_topic(
 
 if __name__ == "__main__":
     try:
-        logger.info("Starting PDF summarization process")
         load_dotenv()
         
         if not os.getenv("OPENAI_API_KEY"):
-            logger.error("OPENAI_API_KEY environment variable not set")
+            console.print("[red bold]Error:[/red bold] OPENAI_API_KEY environment variable not set")
             raise ValueError("Please set the OPENAI_API_KEY environment variable")
         
         status_display = StatusDisplay()
-        
-        # Run with default config
         topics, narrative = run_pdf_summarization(status_display=status_display)
-        logger.info("Processing completed successfully!")
+        console.print("\n[green bold]✓ Processing completed successfully![/green bold]")
         
     except Exception as e:
-        logger.error(f"Fatal error: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
+        console.print_exception(show_locals=True)
+        sys.exit(1)
