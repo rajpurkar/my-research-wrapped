@@ -77,7 +77,6 @@ function App() {
   const [selectedPaper, setSelectedPaper] = useState<{topicIndex: number, paperIndex: number} | null>(null)
   const coAuthorFreq = useRef(new Map<string, number>())
   const nameVariants = useRef(new Map<string, string>())
-  const [mainAuthorNormalized, setMainAuthorNormalized] = useState<string>('')
 
   // Function to get normalized name considering variants
   const getNormalizedName = (name: string) => {
@@ -92,10 +91,6 @@ function App() {
         const narrativeData = await import('./outputs/narrative.json')
         setNarrative(narrativeData.default)
 
-        // Normalize the main author's name
-        const normalizedMainAuthor = normalizeName(narrativeData.default.author);
-        setMainAuthorNormalized(normalizedMainAuthor);
-
         // Temporary maps to accumulate counts and name variants
         const tempCoAuthorFreq = new Map<string, number>();
         const tempNameVariants = new Map<string, string>();
@@ -105,7 +100,7 @@ function App() {
           topic.papers.forEach((paper: Paper) => {
             paper.authors.forEach((author: Author) => {
               const normalizedName = normalizeName(author.normalized_name);
-              if (normalizedName !== normalizedMainAuthor) {
+              if (normalizedName !== narrativeData.default.author) {
                 // Update frequency for the normalized name
                 const count = tempCoAuthorFreq.get(normalizedName) || 0;
                 tempCoAuthorFreq.set(normalizedName, count + 1);
