@@ -280,19 +280,52 @@ function App() {
               (a, b) => b[1] - a[1]
             );
 
-            // Split into three equal-sized tiers
-            const tierSize = Math.ceil(significantCoAuthors.length / 3);
-            const tier1 = significantCoAuthors.slice(0, tierSize);
-            const tier2 = significantCoAuthors.slice(tierSize, tierSize * 2);
-            const tier3 = significantCoAuthors.slice(tierSize * 2);
+            // Group authors by count
+            const countGroups: [string, number][][] = [];
+            let currentCount = -1;
+            let currentGroup: [string, number][] = [];
+
+            significantCoAuthors.forEach(coAuthor => {
+              if (coAuthor[1] !== currentCount) {
+                if (currentGroup.length > 0) {
+                  countGroups.push(currentGroup);
+                }
+                currentGroup = [coAuthor];
+                currentCount = coAuthor[1];
+              } else {
+                currentGroup.push(coAuthor);
+              }
+            });
+            if (currentGroup.length > 0) {
+              countGroups.push(currentGroup);
+            }
+
+            // Split groups into three tiers
+            const tier1: [string, number][] = [];
+            const tier2: [string, number][] = [];
+            const tier3: [string, number][] = [];
+            
+            const totalAuthors = significantCoAuthors.length;
+            let currentSum = 0;
+            
+            countGroups.forEach(group => {
+              if (currentSum < totalAuthors / 3) {
+                tier1.push(...group);
+              } else if (currentSum < (totalAuthors * 2) / 3) {
+                tier2.push(...group);
+              } else {
+                tier3.push(...group);
+              }
+              currentSum += group.length;
+            });
 
             return (
               <section className="coauthors-section">
                 <div className="coauthors-container">
                   <div className="coauthors-grid-lines"></div>
-                  <h2 className="coauthors-title">FREQUENT COLLABORATORS</h2>
+                  <h2 className="coauthors-title">FREQUENT CO-AUTHORS</h2>
                   <div className="coauthors-subtitle">
-                    {significantCoAuthors.length} researchers • {narrative.topics.length} research areas
+                    {significantCoAuthors.length} co-authors with 2+ collaborations
                   </div>
 
                   {tier1.length > 0 && (
