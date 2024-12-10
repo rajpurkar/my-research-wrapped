@@ -51,6 +51,26 @@ const normalizeName = (name: string) => {
   }
 };
 
+// Add this new component above the App function
+const TopicNode: React.FC<{
+  index: number;
+  name: string;
+  onClick: () => void;
+}> = ({ index, name, onClick }) => {
+  return (
+    <div className="topic-node-wrapper">
+      <div className="topic-node-reflection"></div>
+      <button className="topic-node" onClick={onClick}>
+        <div className="topic-node-content">
+          <span className="topic-number">0{index + 1}</span>
+          <span className="topic-name">{name}</span>
+        </div>
+        <div className="node-glow"></div>
+      </button>
+    </div>
+  );
+};
+
 function App() {
   const [narrative, setNarrative] = useState<NarrativeData | null>(null)
   const topicsRef = useRef<HTMLDivElement>(null)
@@ -177,12 +197,10 @@ function App() {
   }
 
   return (
-    <>
+    <div id="root">
       <Helmet>
         <title>Research Year Wrapped 2024 | {narrative?.author || 'Loading...'}</title>
         <meta name="description" content="An interactive visualization of research contributions and impact throughout the year." />
-        
-        {/* Open Graph / Social Media Meta Tags */}
         <meta property="og:title" content={`Research Year Wrapped 2024 | ${narrative?.author || 'Loading...'}`} />
         <meta property="og:description" content="An interactive visualization of research contributions and impact throughout the year." />
         <meta property="og:type" content="website" />
@@ -200,79 +218,94 @@ function App() {
                 scrolling="0"
                 width="150"
                 height="20"
-                title="GitHub Stars"
-                style={{ marginLeft: '16px' }}
+                title="GitHub"
               />
             </div>
           </div>
         </header>
 
-        <main className="main-content">
-          {/* Hero Section */}
-          <section className="hero-section">
-            <div className="stars-container">
-              {generateStars()}
-              {generateSparkles()}
-            </div>
-            <div className="hero-content">
+        {/* Hero Section */}
+        <section className="hero-section">
+          <div className="stars-container">
+            {generateStars()}
+            {generateSparkles()}
+          </div>
+          <div className="hero-content">
             <h2 className="author-name">{narrative.author}</h2>
-              <h1>My Research Wrapped 2024</h1>
-              <div className="author-stats">
-                {(() => {
-                  const totalPapers = narrative.topics.reduce((sum, topic) => sum + topic.papers.length, 0);
-                  const uniqueCoAuthors = new Set();
-                  narrative.topics.forEach(topic => {
-                    topic.papers.forEach(paper => {
-                      paper.authors.forEach(author => {
-                        if (author.normalized_name !== narrative.author) {
-                          uniqueCoAuthors.add(author.normalized_name);
-                        }
-                      });
+            <h1>My Research Wrapped 2024</h1>
+            <div className="author-stats">
+              {(() => {
+                const totalPapers = narrative.topics.reduce((sum, topic) => sum + topic.papers.length, 0);
+                const uniqueCoAuthors = new Set();
+                narrative.topics.forEach(topic => {
+                  topic.papers.forEach(paper => {
+                    paper.authors.forEach(author => {
+                      if (author.normalized_name !== narrative.author) {
+                        uniqueCoAuthors.add(author.normalized_name);
+                      }
                     });
                   });
+                });
 
-                  return (
-                    <>
-                      <span className="stat-item">
-                        <span className="stat-value">{totalPapers}</span>
-                        <span className="stat-label">papers</span>
-                      </span>
-                      <span className="stat-divider">·</span>
-                      <span className="stat-item">
-                        <span className="stat-value">{uniqueCoAuthors.size}</span>
-                        <span className="stat-label">co-authors</span>
-                      </span>
-                    </>
-                  );
-                })()}
+                return (
+                  <>
+                    <span className="stat-item">
+                      <span className="stat-value">{totalPapers}</span>
+                      <span className="stat-label">papers</span>
+                    </span>
+                    <span className="stat-divider">·</span>
+                    <span className="stat-item">
+                      <span className="stat-value">{uniqueCoAuthors.size}</span>
+                      <span className="stat-label">collaborators</span>
+                    </span>
+                  </>
+                );
+              })()}
+            </div>
+            
+            {/* Topics Grid */}
+            <div className="topics-highlight">
+              <div className="topics-grid-background">
+                <div className="grid-lines horizontal"></div>
+                <div className="grid-lines vertical"></div>
               </div>
-              
-              {/* Topics Grid */}
-              <div className="topics-highlight">
+              <div className="topics-nodes-container">
                 {narrative.topics.map((topic, index) => (
-                  <button
+                  <TopicNode
                     key={index}
-                    className="topic-highlight-item"
+                    index={index}
+                    name={topic.name}
                     onClick={() => scrollToTopic(index)}
-                  >
-                    <span className="topic-number">0{index + 1}</span>
-                    <span className="topic-name">{topic.name}</span>
-                  </button>
+                  />
                 ))}
-              </div>
-
-              <div className="narrative-text">
-                {narrative.introduction.split('\n').map((paragraph, index) => (
-                  paragraph.trim() && (
-                    <p key={`intro-${index}`} className="narrative-paragraph">
-                      {paragraph}
-                    </p>
-                  )
-                ))}
+                <div className="connecting-lines">
+                  {/* Add subtle connecting lines between nodes */}
+                  {narrative.topics.map((_, index) => (
+                    index < narrative.topics.length - 1 && (
+                      <div key={`line-${index}`} className="connection-line"></div>
+                    )
+                  ))}
+                </div>
               </div>
             </div>
-          </section>
+          </div>
+        </section>
 
+        {/* Narrative Section */}
+        <section className="narrative-text">
+          <div className="narrative-text-inner">
+            {narrative.introduction.split('\n').map((paragraph, index) => (
+              paragraph.trim() && (
+                <p key={`intro-${index}`} className="narrative-paragraph">
+                  {paragraph}
+                </p>
+              )
+            ))}
+          </div>
+        </section>
+
+        {/* Main Content */}
+        <main className="main-content">
           {/* Co-authors Section */}
           {(() => {
             // Get all authors with at least 2 papers
@@ -421,7 +454,7 @@ function App() {
           </section>
         </main>
       </div>
-    </>
+    </div>
   )
 }
 

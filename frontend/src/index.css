@@ -28,8 +28,15 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.app-container {
+/* App Container */
+#root {
   min-height: 100vh;
+  background: var(--background);
+}
+
+.app-container {
+  position: relative;
+  z-index: 1;
 }
 
 /* Header */
@@ -79,9 +86,32 @@ body {
 
 /* Main Content */
 .main-content {
-  padding-top: var(--header-height);
-  max-width: 1000px;
-  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+  padding-top: 4rem;
+}
+
+.main-content::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      to right,
+      rgba(0,255,255,0.05) 0px,
+      rgba(0,255,255,0.05) 1px,
+      transparent 1px,
+      transparent 20px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0,255,255,0.05) 0px,
+      rgba(0,255,255,0.05) 1px,
+      transparent 1px,
+      transparent 20px
+    );
+  pointer-events: none;
+  z-index: -1;
 }
 
 /* Hero Section */
@@ -474,14 +504,54 @@ body {
     margin: 0.75rem auto;
   }
 
+    /* Add a neon glow and pulse animation to topic highlight items */
   .topic-highlight-item {
-    padding: 0.75rem;
-    min-height: 60px;
-    margin-bottom: 0;
-    display: flex;
-    align-items: center;
-    text-align: left;
+    position: relative;
+    box-shadow: 0 0 8px rgba(0,255,255,0.5), inset 0 0 6px rgba(0,255,255,0.1);
+    animation: pulse-glow 2.5s infinite alternate;
   }
+
+  @keyframes pulse-glow {
+    0% {
+      box-shadow: 0 0 8px rgba(0,255,255,0.5), inset 0 0 6px rgba(0,255,255,0.1);
+    }
+    100% {
+      box-shadow: 0 0 12px rgba(0,255,255,0.7), inset 0 0 10px rgba(0,255,255,0.2);
+    }
+  }
+
+  /* Add a subtle reflection under topic highlight items */
+  .topic-highlight-item::after {
+    content: '';
+    position: absolute;
+    bottom: -10px;
+    left: 0;
+    right: 0;
+    height: 30px;
+    background: linear-gradient(to bottom, rgba(0,255,255,0.1), transparent);
+    filter: blur(8px);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  /* Tron styling for the topic cards */
+  .topic-card {
+    background: #000;
+    border: 1px solid rgba(0,255,255,0.2);
+    box-shadow: 0 0 15px rgba(0,255,255,0.2), inset 0 0 10px rgba(0,255,255,0.05);
+    position: relative;
+    animation: pulse-neon 3s infinite alternate;
+  }
+
+  @keyframes pulse-neon {
+    0% {
+      box-shadow: 0 0 15px rgba(0,255,255,0.2), inset 0 0 10px rgba(0,255,255,0.05);
+    }
+    100% {
+      box-shadow: 0 0 20px rgba(0,255,255,0.4), inset 0 0 14px rgba(0,255,255,0.1);
+    }
+  }
+
 
   .topic-highlight-item .topic-name {
     font-size: 0.875rem;
@@ -518,10 +588,6 @@ body {
   .topics-grid {
     padding: 0.75rem;
     gap: 1.5rem;
-  }
-
-  .topic-card {
-    padding: 1.25rem;
   }
 
   .topic-header h3 {
@@ -611,110 +677,15 @@ body {
 /* Topics Highlight Section */
 .topics-highlight {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1.5rem;
   width: 100%;
-  max-width: 1200px;
+  max-width: 1000px;
+  margin: 2rem auto;
   padding: 0 24px;
-  justify-content: center;
-  align-items: center;
 }
 
 .topic-highlight-item {
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-
-.topic-highlight-item .topic-name {
-  text-align: center;
-  width: 100%;
-}
-
-@media (max-width: 768px) {
-  .topics-highlight {
-    grid-template-columns: 1fr;
-    max-width: 500px;
-    gap: 0.5rem;
-    padding: 0 12px;
-    margin: 1rem auto;
-  }
-
-  .topic-highlight-item {
-    width: 100%;
-    max-width: 400px;
-    margin: 0 auto;
-  }
-
-  .topic-highlight-item .topic-name {
-    padding: 0 1.5rem;
-  }
-
-  .topic-highlight-item .topic-number {
-    left: 50%;
-    transform: translateX(-50%);
-    top: 0.75rem;
-  }
-}
-
-@media (max-width: 480px) {
-  .topics-highlight {
-    gap: 0.4rem;
-    padding: 0 8px;
-  }
-
-  .topic-highlight-item {
-    max-width: 320px;
-  }
-}
-
-/* Enhanced sparkle effects */
-.sparkle {
-  position: absolute;
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--primary);
-  animation: sparkle-float 4s ease-in-out infinite;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sparkle:nth-child(2n) {
-  background: var(--secondary);
-}
-
-.sparkle:nth-child(3n) {
-  background: var(--accent);
-}
-
-.sparkle:nth-child(4n) {
-  background: var(--accent);
-}
-
-.sparkle:nth-child(5n) {
-  background: var(--accent);
-}
-
-@keyframes sparkle-float {
-  0% {
-    transform: translate(0, 0) scale(0);
-    opacity: 0;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    transform: translate(var(--tx), var(--ty)) scale(1);
-    opacity: 0;
-  }
-}
-
-.topic-highlight-item {
-  background: rgba(0, 0, 0, 0.5);
   border: 1px solid var(--border-light);
   border-radius: 12px;
   padding: 1.5rem;
@@ -722,15 +693,14 @@ body {
   cursor: pointer;
   transition: all 0.3s ease;
   text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
   position: relative;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(0, 255, 255, 0.1);
   backdrop-filter: blur(5px);
-  height: 100%;
-  min-height: 150px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
 }
 
@@ -770,34 +740,142 @@ body {
   position: absolute;
   top: 1rem;
   left: 1rem;
+  opacity: 0.8;
 }
 
 .topic-highlight-item .topic-name {
-  font-size: 1.2rem;
-  font-weight: bold;
+  font-size: 1.1rem;
+  font-weight: 500;
   color: #fff;
   text-shadow: 0 0 8px rgba(0, 255, 255, 0.5);
   line-height: 1.4;
-  margin: 0.5rem 0;
+  margin: 0;
+  padding: 0 1rem;
+  text-align: center;
 }
 
+.topic-highlight-item:hover {
+  border-color: rgba(0, 255, 255, 0.6);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 255, 255, 0.2);
+}
+
+.topic-highlight-item:hover .topic-name {
+  text-shadow: 0 0 12px rgba(0, 255, 255, 0.7);
+}
+
+@media (max-width: 768px) {
+  .topic-highlight-item .topic-name {
+    font-size: 1rem;
+  }
+
+  .topic-highlight-item .topic-number {
+    font-size: 0.8rem;
+  }
+}
+
+/* Tron-inspired Narrative Section */
 .narrative-text {
-  margin: 3rem auto;
-  font-size: 0.95rem;
-  color: rgba(255, 255, 255, 0.7);
-  max-width: 800px;
-  padding: 2rem;
+  position: relative;
+  width: 100%;
+  padding: 6rem 0;
   background: rgba(0, 0, 0, 0.3);
-  border-radius: 12px;
-  border: 1px solid rgba(0, 255, 255, 0.1);
-  box-shadow: inset 0 0 20px rgba(0, 255, 255, 0.05);
-  text-align: center;
-  margin-top: 4rem;
+  box-shadow: 
+    0 0 20px rgba(0, 255, 255, 0.1),
+    inset 0 0 30px rgba(0, 255, 255, 0.05);
+  backdrop-filter: blur(5px);
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+
+.narrative-text-inner {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  transform: rotateX(15deg);
+  transform-origin: center top;
 }
 
 .narrative-paragraph {
-  margin-bottom: 1rem;
-  line-height: 1.6;
+  color: #00ffff;
+  text-shadow: 
+    0 0 5px rgba(0, 255, 255, 0.8),
+    0 0 10px rgba(0, 255, 255, 0.4),
+    0 0 15px rgba(0, 255, 255, 0.2);
+  font-family: "Space Mono", monospace;
+  font-size: 1.1rem;
+  line-height: 1.8;
+  margin-bottom: 2rem;
+  text-align: justify;
+  border-left: 2px solid rgba(0, 255, 255, 0.3);
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.narrative-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.narrative-paragraph::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    #00ffff,
+    transparent
+  );
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .topics-highlight {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 700px;
+  }
+
+  .narrative-text {
+    padding: 4rem 0;
+  }
+
+  .narrative-text-inner {
+    padding: 0 1.5rem;
+    transform: rotateX(12deg);
+  }
+
+  .narrative-paragraph {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    padding-left: 1rem;
+  }
+
+  .main-content {
+    padding-top: 3rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .topics-highlight {
+    grid-template-columns: 1fr;
+    max-width: 400px;
+    gap: 1rem;
+    padding: 0 16px;
+  }
+
+  .topic-highlight-item {
+    min-height: 100px;
+    padding: 1.25rem;
+  }
+
+  .narrative-text {
+    padding: 4rem 0;
+    transform: perspective(350px) rotateX(12deg);
+    margin-bottom: 6rem;
+  }
 }
 
 .author-name {
@@ -1213,5 +1291,180 @@ body {
 
   .tier-3 {
     font-size: 1.1rem;
+  }
+}
+
+/* Topics Highlight - Tron Festival Theme */
+.topics-highlight {
+  position: relative;
+  width: 100%;
+  padding: 2rem;
+  perspective: 1000px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topics-grid-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+.grid-lines {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.15;
+  background-image: 
+    linear-gradient(to right, var(--glow-primary) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--glow-primary) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.topics-nodes-container {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2rem;
+  z-index: 1;
+  width: 100%;
+  max-width: 1200px;
+  padding: 2rem;
+}
+
+.topic-node-wrapper {
+  position: relative;
+  transform-style: preserve-3d;
+  perspective: 1000px;
+}
+
+.topic-node {
+  position: relative;
+  width: 100%;
+  padding: 1.5rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  transform: translateZ(10px);
+  text-align: center;
+}
+
+.topic-node::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(135deg, var(--primary), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+
+.topic-node:hover::before {
+  opacity: 0.3;
+}
+
+.node-glow {
+  position: absolute;
+  inset: 0;
+  box-shadow: 0 0 30px var(--glow-primary);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.topic-node:hover .node-glow {
+  opacity: 0.2;
+}
+
+.topic-node-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.topic-number {
+  font-family: 'Space Grotesk', monospace;
+  color: var(--primary);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0;
+  text-shadow: 0 0 15px var(--primary);
+  opacity: 0.7;
+}
+
+.topic-name {
+  color: var(--text);
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  line-height: 1.2;
+  text-shadow: 
+    0 0 10px var(--glow-primary),
+    0 0 20px var(--glow-primary);
+  background: linear-gradient(90deg, var(--text), rgba(255,255,255,0.8));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  transform: translateZ(20px);
+}
+
+/* Remove the vertical connecting line since we're using a grid */
+.connecting-lines {
+  display: none;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+  .topics-nodes-container {
+    grid-template-columns: repeat(2, 1fr);
+    max-width: 800px;
+  }
+}
+
+@media (max-width: 768px) {
+  .topics-nodes-container {
+    grid-template-columns: 1fr;
+    max-width: 400px;
+  }
+  
+  .topic-name {
+    font-size: 1.25rem;
+  }
+}
+
+/* Keep the scanlines effect */
+.topics-highlight::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 255, 255, 0.03) 3px,
+    rgba(0, 255, 255, 0.03) 3px
+  );
+  pointer-events: none;
+  animation: scanlines 10s linear infinite;
+}
+
+@keyframes scanlines {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
   }
 }
