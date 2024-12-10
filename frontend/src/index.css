@@ -1300,7 +1300,6 @@ body {
   width: 100%;
   padding: 2rem;
   perspective: 1000px;
-  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(10px);
   display: flex;
   align-items: center;
@@ -1331,7 +1330,7 @@ body {
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 2rem;
+  gap: 1.5rem;
   z-index: 1;
   width: 100%;
   max-width: 1200px;
@@ -1340,45 +1339,31 @@ body {
 
 .topic-node-wrapper {
   position: relative;
-  transform-style: preserve-3d;
-  perspective: 1000px;
 }
 
 .topic-node {
   position: relative;
   width: 100%;
-  padding: 1.5rem;
+  padding: 1rem;
   background: transparent;
   border: none;
   cursor: pointer;
   transition: all 0.3s ease;
-  transform: translateZ(10px);
   text-align: center;
 }
 
 .topic-node::before {
   content: '';
   position: absolute;
-  inset: -2px;
+  inset: -1px;
   background: linear-gradient(135deg, var(--primary), transparent);
   opacity: 0;
   transition: opacity 0.3s ease;
   z-index: -1;
+  border-radius: 4px;
 }
 
 .topic-node:hover::before {
-  opacity: 0.3;
-}
-
-.node-glow {
-  position: absolute;
-  inset: 0;
-  box-shadow: 0 0 30px var(--glow-primary);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
-.topic-node:hover .node-glow {
   opacity: 0.2;
 }
 
@@ -1386,35 +1371,27 @@ body {
   position: relative;
   z-index: 1;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.75rem;
 }
 
 .topic-number {
   font-family: 'Space Grotesk', monospace;
   color: var(--primary);
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1;
-  margin: 0;
-  text-shadow: 0 0 15px var(--primary);
-  opacity: 0.7;
+  font-size: 1.125rem;
+  font-weight: 500;
+  opacity: 0.8;
+  text-shadow: 0 0 10px var(--glow-primary);
 }
 
 .topic-name {
   color: var(--text);
-  font-size: 1.5rem;
-  font-weight: 800;
-  letter-spacing: 0.1em;
-  line-height: 1.2;
-  text-shadow: 
-    0 0 10px var(--glow-primary),
-    0 0 20px var(--glow-primary);
-  background: linear-gradient(90deg, var(--text), rgba(255,255,255,0.8));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  transform: translateZ(20px);
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 10px var(--glow-primary);
 }
 
 /* Remove the vertical connecting line since we're using a grid */
@@ -1437,7 +1414,7 @@ body {
   }
   
   .topic-name {
-    font-size: 1.25rem;
+    font-size: 1.125rem;
   }
 }
 
